@@ -36,3 +36,43 @@ body {
   background-color: #f0f2f5;
 }
 
+/* Dark dashboard readability overrides */
+.dashboard-dark .ant-card,
+.dashboard-dark .ant-modal-content,
+.dashboard-dark .ant-modal-header {
+  color: #f8fafc !important;
+}
+
+.dashboard-dark .ant-card-head-title,
+.dashboard-dark .ant-typography,
+.dashboard-dark .ant-form-item-label > label,
+.dashboard-dark .ant-descriptions-item-label,
+.dashboard-dark .ant-descriptions-item-content,
+.dashboard-dark .ant-empty-description,
+.dashboard-dark .ant-upload-list-item-name,
+.dashboard-dark .ant-tree-title {
+  color: #f8fafc !important;
+}
+
+.dashboard-dark .ant-typography-secondary,
+.dashboard-dark .ant-form-item-explain,
+.dashboard-dark .ant-card-head .ant-typography,
+.dashboard-dark .ant-tree .ant-tree-node-content-wrapper {
+  color: #cbd5e1 !important;
+}
+
+.dashboard-dark .ant-input,
+.dashboard-dark .ant-input-affix-wrapper,
+.dashboard-dark .ant-input-number,
+.dashboard-dark .ant-select-selector,
+.dashboard-dark .ant-picker {
+  background: rgba(15, 23, 42, 0.75) !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  color: #f8fafc !important;
+}
+
+.dashboard-dark .ant-input::placeholder,
+.dashboard-dark .ant-input-textarea textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
