@@ -1,15 +1,22 @@
 import axios from 'axios';
 
 // Base URL for the backend API and media files
-// يعمل تلقائياً على لوكالهوست وعلى رابط Cloudflare
+// Priority:
+// 1) VITE_API_BASE_URL (Vercel/production)
+// 2) localhost fallback for local development
+// 3) Render fallback
 const LOCAL_API_BASE_URL = 'http://localhost:8000';
-const CLOUD_API_BASE_URL = 'https://modeling-ferrari-definitions-survive.trycloudflare.com';
+const RENDER_API_BASE_URL = 'https://akare.onrender.com';
+const ENV_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim();
 
-export const API_BASE_URL =
-  typeof window !== 'undefined' &&
-  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+export const API_BASE_URL = ENV_API_BASE_URL
+  ? ENV_API_BASE_URL
+  : (
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    )
     ? LOCAL_API_BASE_URL
-    : CLOUD_API_BASE_URL;
+    : RENDER_API_BASE_URL;
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
