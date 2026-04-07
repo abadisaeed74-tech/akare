@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Layout, Typography, message, Button, ConfigProvider } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { SettingOutlined, LogoutOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
+import {
+    SettingOutlined,
+    LogoutOutlined,
+    MenuFoldOutlined,
+    MenuUnfoldOutlined,
+    MoonOutlined,
+    SunOutlined,
+} from '@ant-design/icons';
 import { Property, getProperties, aiSearchProperties, UserPublic, getCurrentUser, setAuthToken } from './services/api';
 import PropertyForm from './components/PropertyForm';
 import NavigationTree from './components/NavigationTree';
@@ -19,7 +26,19 @@ const App: React.FC = () => {
     const [currentUser, setCurrentUser] = useState<UserPublic | null>(null);
     const [siderCollapsed, setSiderCollapsed] = useState<boolean>(false);
     const [treeReloadKey, setTreeReloadKey] = useState<number>(0);
+    const [mode, setMode] = useState<'light' | 'dark'>('dark');
     const navigate = useNavigate();
+
+    useEffect(() => {
+        const savedMode = window.localStorage.getItem('akare_theme_mode');
+        if (savedMode === 'light' || savedMode === 'dark') {
+            setMode(savedMode);
+        }
+    }, []);
+
+    useEffect(() => {
+        window.localStorage.setItem('akare_theme_mode', mode);
+    }, [mode]);
 
     const fetchAndSetProperties = useCallback(async () => {
         setLoading(true);
@@ -88,16 +107,51 @@ const App: React.FC = () => {
         navigate('/auth', { replace: true });
     };
 
+    const isDark = mode === 'dark';
+    const palette = isDark
+        ? {
+              pageBg:
+                  'radial-gradient(circle at 12% 14%, rgba(99,102,241,0.2), transparent 36%), radial-gradient(circle at 88% 12%, rgba(6,182,212,0.14), transparent 30%), linear-gradient(145deg, #1e293b 0%, #334155 48%, #1e293b 100%)',
+              glassBg: 'rgba(30, 41, 59, 0.58)',
+              glassBorder: '1px solid rgba(148,163,184,0.35)',
+              text: '#f8fafc',
+              textMuted: '#cbd5e1',
+              cardBg: '#1e293b',
+          }
+        : {
+              pageBg:
+                  'radial-gradient(circle at 10% 12%, rgba(30,58,138,0.14), transparent 36%), radial-gradient(circle at 92% 10%, rgba(56,189,248,0.13), transparent 30%), linear-gradient(145deg, #f7faff 0%, #ffffff 50%, #f2f9ff 100%)',
+              glassBg: '#ffffffcc',
+              glassBorder: '1px solid #e2e8f0',
+              text: '#0f172a',
+              textMuted: '#475569',
+              cardBg: '#ffffff',
+          };
+
+    const appTheme = {
+        token: {
+            colorPrimary: '#2563eb',
+            colorBgLayout: 'transparent',
+            colorBgContainer: palette.cardBg,
+            colorText: palette.text,
+            colorTextSecondary: palette.textMuted,
+            borderRadius: 14,
+            fontFamily:
+                "'Readex Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif",
+        },
+        components: {
+            Card: {
+                colorBgContainer: palette.cardBg,
+            },
+        },
+    };
+
     return (
-        <ConfigProvider
-            theme={{
-                token: {
-                    fontFamily:
-                        "'Readex Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif",
-                },
-            }}
+        <ConfigProvider theme={appTheme}>
+        <Layout
+            className={isDark ? 'dashboard-dark' : 'dashboard-light'}
+            style={{ minHeight: '100vh', direction: 'rtl', background: palette.pageBg }}
         >
-        <Layout style={{ minHeight: '100vh', direction: 'rtl' }}>
             <Sider
                 width={250}
                 collapsible
@@ -105,16 +159,34 @@ const App: React.FC = () => {
                 onCollapse={(collapsed) => setSiderCollapsed(collapsed)}
                 collapsedWidth={0}
                 breakpoint="lg"
-                trigger={siderCollapsed ? <RightOutlined /> : <LeftOutlined />}
-                style={{ background: '#f0f2f5', borderLeft: '1px solid #e8e8e8' }}
+                trigger={null}
+                style={{
+                    background: palette.glassBg,
+                    borderLeft: palette.glassBorder,
+                    backdropFilter: 'blur(10px)',
+                    WebkitBackdropFilter: 'blur(10px)',
+                }}
             >
-                <div style={{ padding: '16px', textAlign: 'center' }}>
-                    <Title level={4} style={{ color: '#1890ff' }}>عقاري</Title>
+                <div style={{ padding: '16px', textAlign: 'center', borderBottom: palette.glassBorder }}>
+                    <Title level={4} style={{ color: palette.text, margin: 0 }}>عقاري</Title>
+                    <Text style={{ color: palette.textMuted, fontSize: 12 }}>لوحة تحكم المكتب العقاري</Text>
                 </div>
-                <NavigationTree onSelect={handleSelectInTree} reloadKey={treeReloadKey} />
+                <div style={{ padding: 8 }}>
+                    <NavigationTree onSelect={handleSelectInTree} reloadKey={treeReloadKey} darkMode={isDark} />
+                </div>
             </Sider>
-            <Layout>
-                <Header style={{ background: '#fff', padding: '0 16px', borderBottom: '1px solid #e8e8e8' }}>
+            <Layout style={{ background: 'transparent' }}>
+                <Header
+                    style={{
+                        background: palette.glassBg,
+                        padding: '0 16px',
+                        height: 72,
+                        lineHeight: '72px',
+                        borderBottom: palette.glassBorder,
+                        backdropFilter: 'blur(10px)',
+                        WebkitBackdropFilter: 'blur(10px)',
+                    }}
+                >
                     <div
                         style={{
                             display: 'flex',
@@ -122,39 +194,78 @@ const App: React.FC = () => {
                             justifyContent: 'space-between',
                             flexWrap: 'wrap',
                             rowGap: 8,
+                            columnGap: 16,
+                            minHeight: 72,
+                            paddingTop: 6,
                         }}
                     >
-                        <Title
-                            level={3}
-                            style={{
-                                color: '#001529',
-                                margin: 0,
-                                whiteSpace: 'nowrap',
-                                fontSize: 20,
-                            }}
-                        >
-                            نظام إدارة العروض العقارية
-                        </Title>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <Button
+                                type="text"
+                                onClick={() => setSiderCollapsed((prev) => !prev)}
+                                icon={
+                                    siderCollapsed ? (
+                                        <MenuUnfoldOutlined style={{ color: palette.text }} />
+                                    ) : (
+                                        <MenuFoldOutlined style={{ color: palette.text }} />
+                                    )
+                                }
+                                style={{
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: 12,
+                                    border: palette.glassBorder,
+                                    background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
+                                }}
+                                aria-label="إظهار أو إخفاء القائمة الجانبية"
+                            />
+                            <Title
+                                level={3}
+                                style={{
+                                    color: palette.text,
+                                    margin: 0,
+                                    whiteSpace: 'nowrap',
+                                    fontSize: 20,
+                                }}
+                            >
+                                نظام إدارة العروض العقارية
+                            </Title>
+                        </div>
                         <div
                             style={{
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: 12,
                                 flex: 1,
-                                minWidth: 260,
+                                minWidth: 320,
+                                marginInlineStart: 12,
                             }}
                         >
                             <Search
                                 placeholder="ابحث عن مدينة، حي، تفاصيل..."
                                 onSearch={handleSearch}
-                                enterButton
+                                enterButton="بحث"
                                 allowClear
                                 style={{ width: '100%', direction: 'ltr' }}
                             />
                             {currentUser ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                     <Button
-                                        type="link"
+                                        type="text"
+                                        icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+                                        onClick={() => setMode(isDark ? 'light' : 'dark')}
+                                        aria-label="تبديل الوضع الليلي والنهاري"
+                                        style={{
+                                            width: 38,
+                                            height: 38,
+                                            borderRadius: 12,
+                                            border: palette.glassBorder,
+                                            color: palette.text,
+                                            background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
+                                        }}
+                                    />
+                                    <Button
+                                        type="text"
                                         icon={<SettingOutlined />}
                                         onClick={() => {
                                             if (currentUser?.role !== 'owner') {
@@ -164,21 +275,37 @@ const App: React.FC = () => {
                                             navigate('/settings');
                                         }}
                                         aria-label="إعدادات المنصة"
+                                        style={{
+                                            width: 38,
+                                            height: 38,
+                                            borderRadius: 12,
+                                            border: palette.glassBorder,
+                                            color: palette.text,
+                                            background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
+                                        }}
                                     />
                                     <Button
-                                        type="link"
+                                        type="text"
                                         icon={<LogoutOutlined />}
                                         onClick={handleLogout}
                                         aria-label="تسجيل الخروج"
+                                        style={{
+                                            width: 38,
+                                            height: 38,
+                                            borderRadius: 12,
+                                            border: palette.glassBorder,
+                                            color: '#ef4444',
+                                            background: isDark ? 'rgba(248,113,113,0.08)' : 'rgba(255,255,255,0.75)',
+                                        }}
                                     />
                                 </div>
                             ) : (
-                                <Text style={{ whiteSpace: 'nowrap' }}>غير مسجل الدخول</Text>
+                                <Text style={{ whiteSpace: 'nowrap', color: palette.textMuted }}>غير مسجل الدخول</Text>
                             )}
                         </div>
                     </div>
                 </Header>
-                <Content style={{ margin: '24px 16px 0' }}>
+                <Content style={{ margin: '20px 16px 16px' }}>
                     <PropertyForm onSuccess={handlePropertyCreated} currentUser={currentUser} />
                     <PropertyList
                         properties={properties}

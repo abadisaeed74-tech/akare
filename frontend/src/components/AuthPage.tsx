@@ -1,12 +1,21 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, Tabs, Form, Input, Button, Typography, message } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { registerUser, loginUser, getCurrentUser, setAuthToken } from '../services/api';
 
 const { Title, Text } = Typography;
 
 const AuthPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const mode = searchParams.get('mode');
+  const [activeTab, setActiveTab] = useState<'login' | 'register'>(
+    mode === 'register' ? 'register' : 'login'
+  );
+
+  useEffect(() => {
+    setActiveTab(mode === 'register' ? 'register' : 'login');
+  }, [mode]);
 
   const handleRegister = async (values: { email: string; password: string; gemini_api_key?: string }) => {
     try {
@@ -38,7 +47,8 @@ const AuthPage: React.FC = () => {
           لوحة دخول المكاتب العقارية
         </Title>
         <Tabs
-          defaultActiveKey="login"
+          activeKey={activeTab}
+          onChange={(key) => setActiveTab(key as 'login' | 'register')}
           items={[
             {
               key: 'login',

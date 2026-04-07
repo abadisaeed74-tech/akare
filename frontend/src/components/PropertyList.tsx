@@ -1,27 +1,8 @@
 import React, { useState } from 'react';
 import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Carousel, Image } from 'antd';
 import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, type UserPublic } from '../services/api';
-import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 
 const { Text, Paragraph } = Typography;
-
-// Custom styles for carousel arrows and preview
-const arrowStyle: React.CSSProperties = {
-    position: 'absolute',
-    top: '50%',
-    transform: 'translateY(-50%)',
-    zIndex: 10,
-    fontSize: 20,
-    color: '#fff',
-    background: 'rgba(0, 0, 0, 0.5)',
-    width: 32,
-    height: 32,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: '50%',
-    cursor: 'pointer',
-};
 
 interface PropertyListProps {
     properties: Property[];
@@ -157,7 +138,7 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
 
     if (loading) {
         return (
-            <Card>
+            <Card style={{ borderRadius: 16, boxShadow: '0 12px 28px rgba(15,23,42,0.08)' }}>
                 <List dataSource={[]} loading={true} />
             </Card>
         );
@@ -165,7 +146,7 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
 
     if (properties.length === 0) {
         return (
-            <Card>
+            <Card style={{ borderRadius: 16, boxShadow: '0 12px 28px rgba(15,23,42,0.08)' }}>
                 <Empty description="لا توجد عروض عقارية تطابق هذا الفلتر." />
             </Card>
         );
@@ -202,17 +183,20 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                 <List.Item>
                     <Card
                         title={`${formatOrPlaceholder(property.property_type)} في ${formatOrPlaceholder(property.neighborhood)}`}
-                        bordered={false}
+                        variant="borderless"
                         style={{
-                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
+                            boxShadow: '0 12px 28px rgba(15, 23, 42, 0.12)',
                             display: 'flex',
                             flexDirection: 'column',
                             height: 500,
+                            borderRadius: 16,
                         }}
-                        bodyStyle={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            height: '100%',
+                        styles={{
+                            body: {
+                                display: 'flex',
+                                flexDirection: 'column',
+                                height: '100%',
+                            },
                         }}
                     >
                         <div
@@ -228,8 +212,6 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                                 <Image.PreviewGroup>
                                     <Carousel
                                         arrows={true}
-                                        prevArrow={<div style={{ ...arrowStyle, left: 8 }}><RightOutlined /></div>}
-                                        nextArrow={<div style={{ ...arrowStyle, right: 8 }}><LeftOutlined /></div>}
                                     >
                                         {property.images.map((url, index) => (
                                             <div

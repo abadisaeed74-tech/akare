@@ -86,7 +86,15 @@ const PropertyForm: React.FC<PropertyFormProps> = ({ onSuccess, currentUser }) =
     };
 
     return (
-        <Card title="إضافة عرض عقاري جديد" style={{ marginBottom: 24 }}>
+        <Card
+            title="إضافة عرض عقاري جديد"
+            style={{
+                marginBottom: 24,
+                borderRadius: 16,
+                boxShadow: '0 14px 30px rgba(15,23,42,0.08)',
+            }}
+            styles={{ header: { fontWeight: 700 } }}
+        >
             {showUpgradeHint && currentUser?.role === 'owner' && (
                 <Alert
                     type="warning"

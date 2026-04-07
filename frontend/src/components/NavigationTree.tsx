@@ -7,9 +7,10 @@ import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
 interface NavigationTreeProps {
     onSelect: (type: 'city' | 'neighborhood' | 'all', key: string) => void;
     reloadKey?: number;
+    darkMode?: boolean;
 }
 
-const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey }) => {
+const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey, darkMode = false }) => {
     const [treeData, setTreeData] = useState<DataNode[]>([]);
     const [loading, setLoading] = useState(true);
     const [showDelete, setShowDelete] = useState(false);
@@ -169,7 +170,7 @@ const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey }) 
                     padding: '0 8px 8px',
                 }}
             >
-                <span style={{ fontSize: 12, color: '#888' }}>شجرة المدن والأحياء</span>
+                <span style={{ fontSize: 12, color: darkMode ? '#cbd5e1' : '#64748b' }}>شجرة المدن والأحياء</span>
                 <Tooltip title={showDelete ? 'إخفاء أزرار الحذف' : 'إظهار أزرار الحذف'}>
                     <Button
                         type={showDelete ? 'primary' : 'text'}
@@ -186,7 +187,7 @@ const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey }) 
                 treeData={treeData}
                 titleRender={(node) => {
                     if (node.key === 'all') {
-                        return <span>{node.title as React.ReactNode}</span>;
+                        return <span style={{ color: darkMode ? '#f8fafc' : '#0f172a' }}>{node.title as React.ReactNode}</span>;
                     }
                     return (
                         <div
@@ -196,7 +197,7 @@ const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey }) 
                                 alignItems: 'center',
                             }}
                         >
-                            <span>{node.title as React.ReactNode}</span>
+                            <span style={{ color: darkMode ? '#f8fafc' : '#0f172a' }}>{node.title as React.ReactNode}</span>
                             {showDelete && (
                                 <Tooltip title="حذف جميع العروض في هذا الفرع">
                                     <Button
@@ -211,7 +212,11 @@ const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey }) 
                         </div>
                     );
                 }}
-                style={{ background: '#fff' }}
+                style={{
+                    background: darkMode ? 'rgba(15,23,42,0.35)' : '#fff',
+                    borderRadius: 12,
+                    padding: 6,
+                }}
             />
         </div>
     );
