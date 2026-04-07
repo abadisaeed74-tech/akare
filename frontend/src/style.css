@@ -6,6 +6,30 @@ html, body, #root {
     'Segoe UI Symbol', 'Noto Color Emoji' !important;
 }
 
+:root {
+  --ant-font-family: 'Readex Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Noto Color Emoji';
+}
+
+.ant-app,
+.ant-typography,
+.ant-btn,
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select,
+.ant-form,
+.ant-card,
+.ant-menu,
+.ant-tree,
+.ant-modal,
+.ant-tag,
+.ant-table,
+.ant-descriptions,
+.ant-tabs {
+  font-family: var(--ant-font-family) !important;
+}
+
 body {
   margin: 0;
   padding: 0;

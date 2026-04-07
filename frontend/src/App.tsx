@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Layout, Typography, message, Button } from 'antd';
+import { Layout, Typography, message, Button, ConfigProvider } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { SettingOutlined, LogoutOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { Property, getProperties, aiSearchProperties, UserPublic, getCurrentUser, setAuthToken } from './services/api';
@@ -89,6 +89,14 @@ const App: React.FC = () => {
     };
 
     return (
+        <ConfigProvider
+            theme={{
+                token: {
+                    fontFamily:
+                        "'Readex Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif",
+                },
+            }}
+        >
         <Layout style={{ minHeight: '100vh', direction: 'rtl' }}>
             <Sider
                 width={250}
@@ -181,6 +189,7 @@ const App: React.FC = () => {
                 </Content>
             </Layout>
         </Layout>
+        </ConfigProvider>
     );
 };
 
