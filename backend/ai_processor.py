@@ -1,0 +1,183 @@
+import os
+import json
+from google import genai  # updated import for the google-genai client
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Default API key from environment (used if the user doesn't have a personal key)
+default_api_key = os.getenv("GEMINI_API_KEY")
+
+# Get the Gemini model name (configurable via .env to avoid hard‑coding)
+model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+
+def _get_gemini_client(api_key_override: str | None = None) -> genai.Client:
+    """
+    Returns a Gemini client using either:
+      - the per-user api_key_override (gemini_api_key from the user), or
+      - the default GEMINI_API_KEY from the environment.
+    """
+    api_key = api_key_override or default_api_key
+    if not api_key:
+        raise ValueError(
+            "No Gemini API key configured. "
+            "Set GEMINI_API_KEY in the environment or configure gemini_api_key for the user."
+        )
+    return genai.Client(api_key=api_key)
+
+def process_real_estate_text(text: str, api_key: str | None = None) -> dict:
+    """
+    Analyzes a real estate text using Gemini to extract structured data.
+
+    Args:
+        text: The raw real estate listing text.
+
+    Returns:
+        A dictionary containing the extracted property information.
+    """
+    prompt = f"""
+    Analyze the following real estate listing text from Saudi Arabia. Your task is to extract the specified entities and return them as a valid JSON object.
+
+    **Text to Analyze:**
+    "{text}"
+
+    **Entities to Extract:**
+    - "city": The city where the property is located (e.g., "جدة", "الرياض").
+    - "neighborhood": The district or neighborhood (e.g., "الفيحاء", "العزيزية").
+    - "property_type": The type of property (e.g., "فيلا", "شقة", "أرض").
+    - "area": The area of the property in square meters. Must be a number.
+    - "price": The price of the property. Must be a number.
+    - "details": Any other relevant details (e.g., "دورين", "3 غرف نوم").
+    - "owner_name": The name of the owner or contact person.
+    - "owner_contact_number": The phone number of the OWNER (for example: رقم المالك).
+    - "marketer_contact_number": The phone number of the MARKETER/AGENT (for example: رقم المسوق, الوسيط, المعلن).
+    - "formatted_description": A single, well-written Arabic paragraph that describes the property in a professional real-estate style, combining all important information (city, neighborhood, type, area, price, key features, and contact info) in a clear and attractive way for buyers.
+    - "region_within_city": OPTIONAL. The rough region of the property inside its city, inferred from the city + neighborhood only.
+         Use ONLY one of these exact Arabic strings: "شمال", "جنوب", "شرق", "غرب", "وسط", "غير مذكور".
+         Example: حي الروضة في جدة => "شمال". حي البطحاء في الرياض => "وسط".
+
+    **Rules:**
+    1.  The output MUST be a single, valid JSON object.
+    2.  All keys must be in English as specified above.
+    3.  Values should be in Arabic as they appear in the text, except for 'area' and 'price' which must be numbers.
+    4.  If a value is not found for a TEXT field (city, neighborhood, property_type, details, owner_name, owner_contact_number, marketer_contact_number, formatted_description, region_within_city), use the Arabic string "غير مذكور".
+    5.  If a value is not found for a NUMERIC field (area, price), use a JSON `null` value.
+    6.  If there is only ONE phone number in the text and it clearly belongs to the owner, put it in "owner_contact_number" and set "marketer_contact_number" to null.
+    7.  Do not include any text, explanations, or markdown formatting before or after the JSON object.
+
+    **Example Output:**
+    {{
+      "city": "جدة",
+      "neighborhood": "الفيحاء",
+      "property_type": "فيلا",
+      "area": 300,
+      "price": 7000000,
+      "details": "دورين",
+      "owner_name": "محمد أحمد",
+      "owner_contact_number": "057894762",
+      "marketer_contact_number": null,
+      "formatted_description": "فيلا مميزة للبيع في حي الفيحاء بمدينة جدة، بمساحة 300 متر مربع، بسعر 7,000,000 ريال، تتكون من دورين مع تشطيب ممتاز، مناسبة للعائلات الباحثة عن سكن راقٍ، للتواصل مع المالك محمد أحمد على الرقم 057894762.",
+      "region_within_city": "شمال"
+    }}
+    """
+
+    try:
+        # Call the Gemini model using the new google-genai client
+        # Prefer per-user key over the default environment key
+        client = _get_gemini_client(api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+        )
+        # Clean the response to get only the JSON part
+        text_response = getattr(response, "text", "")
+        json_text = text_response.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(json_text)
+        return data
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"Error processing text with AI: {e}")
+        # In case of an error, return a structured error message or an empty dict
+        return {"error": "Failed to process text with AI", "details": str(e)}
+
+
+def process_search_text(text: str, api_key: str | None = None) -> dict:
+    """
+    Analyzes a buyer's free-text search request (in Arabic) and converts it
+    into structured filters that can be used to query the properties collection.
+
+    Returns a JSON dict with:
+      - city: string or null
+      - neighborhood: string or null
+      - property_type: string or null
+      - region_within_city: string or null (one of "شمال", "جنوب", "شرق", "غرب", "وسط", or null)
+      - min_area: number or null
+      - max_area: number or null
+      - min_price: number or null
+      - max_price: number or null
+      - keywords: array of short Arabic phrases relevant for text search
+    """
+    prompt = f"""
+    You are helping a real-estate platform in Saudi Arabia.
+    A real-estate AGENT writes a free-text BUYER REQUEST in Arabic, for example:
+
+    "أبحث عن أرض في الرياض مساحتها 1000 متر وعلى شارعين"
+
+    Your task is to convert this buyer request into structured SEARCH FILTERS
+    that can be used to query a database of properties.
+
+    **Buyer Request to Analyze (Arabic):**
+    "{text}"
+
+    **Filters to Extract (as JSON):**
+    - "city": The requested city (e.g., "الرياض", "جدة"). If not clear, use null.
+    - "neighborhood": The requested neighborhood if specified (e.g., "العزيزية"). If not clear, use null.
+    - "property_type": The requested type of property (e.g., "أرض", "فيلا", "شقة"). If not clear, use null.
+    - "region_within_city": OPTIONAL. If the buyer clearly specifies a region inside the city (like "شمال جدة", "جنوب الرياض"),
+          infer one of exactly: "شمال", "جنوب", "شرق", "غرب", "وسط". Otherwise use null.
+    - "min_area": Minimum area in square meters (number). If the user mentions one area like 1000m, set min_area a bit lower (e.g., 900). If not clear, use null.
+    - "max_area": Maximum area in square meters (number). If the user mentions one area like 1000m, set max_area a bit higher (e.g., 1100). If not clear, use null.
+    - "min_price": Minimum price (number) if the buyer mentions a range or minimum. Otherwise null.
+    - "max_price": Maximum price (number) if the buyer mentions a range or maximum. Otherwise null.
+    - "keywords": An array of IMPORTANT Arabic words or short phrases to match inside property details/raw text.
+                  Examples: ["شارعين", "زاوية", "سكني", "تجاري"].
+
+    **Rules:**
+    1.  The output MUST be a single, valid JSON object.
+    2.  All keys must be EXACTLY: "city", "neighborhood", "property_type",
+        "region_within_city", "min_area", "max_area", "min_price", "max_price", "keywords".
+    3.  All numeric fields must be numbers or null.
+    4.  All text fields must be Arabic strings or null.
+    5.  "keywords" must always be an array (possibly empty).
+    6.  Do NOT include any extra keys.
+    7.  Do NOT include any explanations or text before or after the JSON.
+
+    **Example Output:**
+    {{
+      "city": "جدة",
+      "neighborhood": null,
+      "property_type": "أرض",
+      "region_within_city": "شمال",
+      "min_area": 900,
+      "max_area": 1100,
+      "min_price": null,
+      "max_price": null,
+      "keywords": ["شارعين", "زاوية"]
+    }}
+    """
+
+    try:
+        client = _get_gemini_client(api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+        )
+        text_response = getattr(response, "text", "")
+        json_text = text_response.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(json_text)
+        return data
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"Error processing search text with AI: {e}")
+        return {"error": "Failed to process search text with AI", "details": str(e)}
+
