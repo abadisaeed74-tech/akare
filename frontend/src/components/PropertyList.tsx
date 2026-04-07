@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Carousel, Image } from 'antd';
 import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, type UserPublic } from '../services/api';
-import { EyeOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 
 const { Text, Paragraph } = Typography;
 
@@ -21,21 +21,6 @@ const arrowStyle: React.CSSProperties = {
     justifyContent: 'center',
     borderRadius: '50%',
     cursor: 'pointer',
-};
-
-const carouselStyle: React.CSSProperties = {
-    position: 'relative',
-};
-
-const previewButtonStyle: React.CSSProperties = {
-    position: 'absolute',
-    bottom: 8,
-    right: 8,
-    zIndex: 10,
-    background: 'rgba(0, 0, 0, 0.6)',
-    color: '#fff',
-    borderRadius: 4,
-    fontSize: 12,
 };
 
 interface PropertyListProps {

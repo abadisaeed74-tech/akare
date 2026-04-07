@@ -27,10 +27,8 @@ import {
   updateMyGeminiKey,
   getSettingsOverview,
   updateCompanySettings,
-  changePlan,
   checkSubdomainAvailability,
   updateSubdomain,
-  getTeamUsers,
   createEmployeeUser,
   updateEmployeeUser,
   uploadFile,
@@ -88,6 +86,7 @@ const dummyCompany: CompanySettings = {
   company_name: 'مكتب عقاري تجريبي',
   official_email: 'info@example.com',
   contact_phone: '+9665xxxxxxx',
+  plan_key: 'starter',
 };
 
 const dummyTeam: TeamUser[] = [
@@ -735,7 +734,7 @@ const SettingsPage: React.FC = () => {
             } else {
               const created = await createEmployeeUser({
                 email: values.email,
-                password: values.password,
+                password: values.password || '',
                 permissions,
               });
               setTeamUsers((prev) => [...prev, created]);

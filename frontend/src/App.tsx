@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Layout, Typography, message, Button } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { SettingOutlined, LogoutOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
-import { Property, getProperties, aiSearchProperties, UserPublic, getCurrentUser, setAuthToken, updateMyGeminiKey } from './services/api';
+import { Property, getProperties, aiSearchProperties, UserPublic, getCurrentUser, setAuthToken } from './services/api';
 import PropertyForm from './components/PropertyForm';
 import NavigationTree from './components/NavigationTree';
 import PropertyList from './components/PropertyList';
@@ -17,7 +17,6 @@ const App: React.FC = () => {
     const [loading, setLoading] = useState<boolean>(true);
     const [filters, setFilters] = useState<object>({});
     const [currentUser, setCurrentUser] = useState<UserPublic | null>(null);
-    const [authLoading, setAuthLoading] = useState<boolean>(true);
     const [siderCollapsed, setSiderCollapsed] = useState<boolean>(false);
     const [treeReloadKey, setTreeReloadKey] = useState<number>(0);
     const navigate = useNavigate();
@@ -43,8 +42,6 @@ const App: React.FC = () => {
                 setCurrentUser(null);
                 setAuthToken(null);
                 navigate('/auth', { replace: true });
-            } finally {
-                setAuthLoading(false);
             }
         };
         initAuth();
@@ -89,17 +86,6 @@ const App: React.FC = () => {
         setCurrentUser(null);
         message.success('تم تسجيل الخروج.');
         navigate('/auth', { replace: true });
-    };
-
-    const handleGeminiKeyUpdate = async (values: { gemini_api_key?: string }) => {
-        try {
-            const user = await updateMyGeminiKey(values.gemini_api_key || null);
-            setCurrentUser(user);
-            message.success('تم تحديث مفتاح Gemini بنجاح.');
-        } catch (error: any) {
-            const detail = error.response?.data?.detail || 'فشل في تحديث مفتاح Gemini.';
-            message.error(`خطأ: ${detail}`);
-        }
     };
 
     return (
