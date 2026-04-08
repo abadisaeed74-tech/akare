@@ -31,6 +31,7 @@ import {
   createEmployeeUser,
   updateEmployeeUser,
   createStripePortalSession,
+  startFreeTrial,
   uploadFile,
   resolveMediaUrl,
   type UserPublic,
@@ -300,6 +301,7 @@ const SettingsPage: React.FC = () => {
   const renderPlansSection = () => {
     const effectiveSubscribedPlanKey = companySettings.plan_key || planUsage.plan.key;
     const hasSubscription = !!companySettings.is_subscribed;
+    const canStartTrial = !hasSubscription && !companySettings.trial_used;
 
     // حساب قيم تبويب حالة الاشتراك
     const startedAt = companySettings.subscription_started_at
@@ -364,6 +366,7 @@ const SettingsPage: React.FC = () => {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
           {PLANS.map((plan) => {
             const isCurrent = plan.key === effectiveSubscribedPlanKey;
+            const canStartTrialForThisPlan = canStartTrial && plan.key === 'starter';
             return (
               <Card
                 key={plan.key}
@@ -396,17 +399,43 @@ const SettingsPage: React.FC = () => {
                     type={isCurrent ? 'default' : 'primary'}
                     block
                     disabled={isCurrent && hasSubscription}
-                    onClick={() => {
+                    onClick={async () => {
+                      if (canStartTrialForThisPlan) {
+                        try {
+                          const updatedCompany = await startFreeTrial(plan.key);
+                          setCompanySettings(updatedCompany);
+                          const overview = await getSettingsOverview();
+                          setPlanUsage(overview.plan_usage);
+                          message.success('تم تفعيل الشهر المجاني بنجاح.');
+                        } catch (e: any) {
+                          const detail =
+                            e?.response?.data?.detail || 'تعذّر بدء التجربة المجانية.';
+                          message.error(detail);
+                        }
+                        return;
+                      }
                       navigate(`/billing/checkout?plan=${plan.key}`);
                     }}
                   >
-                    {isCurrent && hasSubscription ? 'الخطة الحالية' : 'اشترك الآن'}
+                    {isCurrent && hasSubscription
+                      ? 'الخطة الحالية'
+                      : canStartTrialForThisPlan
+                        ? 'ابدأ الشهر المجاني'
+                        : 'اشترك الآن'}
                   </Button>
                 </Space>
               </Card>
             );
           })}
         </div>
+
+        {!hasSubscription && companySettings.trial_used && (
+          <div style={{ marginBottom: 16 }}>
+            <Text type="warning">
+              تم استخدام الشهر المجاني مسبقًا لهذا الحساب. يمكنك الآن اختيار خطة مدفوعة لإكمال الاستخدام.
+            </Text>
+          </div>
+        )}
 
         <Descriptions bordered column={1} size="middle">
           <Descriptions.Item label="الخطة الحالية">

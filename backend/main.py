@@ -62,6 +62,7 @@ from database import (
     get_company_by_stripe_customer_id,
     update_company_billing_from_stripe,
     consume_company_daily_ai_quota,
+    start_company_free_trial_db,
 )
 
 
@@ -129,6 +130,7 @@ try:
     AI_DAILY_ANALYSIS_LIMIT = int(os.getenv("AI_DAILY_ANALYSIS_LIMIT", "30"))
 except ValueError:
     AI_DAILY_ANALYSIS_LIMIT = 30
+FREE_TRIAL_PLAN_KEY = "starter"
 
 
 def verify_password(plain_password, hashed_password):
@@ -257,7 +259,51 @@ def company_settings_response(company: Dict) -> CompanySettings:
         subscription_ends_at=company.get("subscription_ends_at"),
         billing_status=company.get("billing_status"),
         cancel_at_period_end=company.get("cancel_at_period_end", False),
+        trial_used=company.get("trial_used", False),
     )
+
+
+async def refresh_trial_subscription_state(owner_user_id: str) -> Dict:
+    """
+    Auto-expire free trial when its end date is reached.
+    """
+    company = await get_or_create_company_for_owner(owner_user_id)
+    if not company.get("is_subscribed", False):
+        return company
+    if company.get("billing_status") != "trialing":
+        return company
+
+    ends_at = company.get("subscription_ends_at")
+    if not ends_at:
+        return company
+
+    if isinstance(ends_at, str):
+        try:
+            ends_at = datetime.fromisoformat(ends_at.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            return company
+
+    if isinstance(ends_at, datetime) and ends_at <= datetime.utcnow():
+        updated = await update_company_billing_from_stripe(
+            owner_user_id,
+            billing_status="trial_ended",
+            is_subscribed=False,
+            cancel_at_period_end=False,
+        )
+        if updated:
+            return updated
+
+    return company
+
+
+async def can_view_company_properties(owner_user_id: Optional[str]) -> bool:
+    """
+    Visibility guard: hide all company listings in dashboard when subscription is inactive.
+    """
+    if not owner_user_id:
+        return False
+    company = await refresh_trial_subscription_state(owner_user_id)
+    return bool(company.get("is_subscribed", False))
 
 
 def ensure_stripe_ready(plan_key: Optional[str] = None) -> None:
@@ -325,7 +371,7 @@ async def upload_file(
             status_code=400,
             detail="لا يمكن تحديد شركة الحساب الحالي.",
         )
-    company_for_plan = await get_or_create_company_for_owner(owner_id_for_plan)
+    company_for_plan = await refresh_trial_subscription_state(owner_id_for_plan)
     if not company_for_plan.get("is_subscribed", False):
         raise HTTPException(
             status_code=403,
@@ -361,7 +407,7 @@ async def get_settings_overview(current_user: UserPublic = Depends(get_current_u
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="هذه الصفحة متاحة لمالك الحساب فقط.")
 
-    company = await get_or_create_company_for_owner(current_user.id)
+    company = await refresh_trial_subscription_state(current_user.id)
     plan_dict = get_plan(company.get("plan_key", "starter"))
     plan = PlanInfo(**plan_dict)
 
@@ -401,6 +447,7 @@ async def get_settings_overview(current_user: UserPublic = Depends(get_current_u
         subscription_ends_at=company.get("subscription_ends_at"),
         billing_status=company.get("billing_status"),
         cancel_at_period_end=company.get("cancel_at_period_end", False),
+        trial_used=company.get("trial_used", False),
     )
 
     return SettingsOverview(
@@ -732,6 +779,38 @@ async def activate_subscription(
     return company_settings_response(updated)
 
 
+@app.post("/billing/start-free-trial", response_model=CompanySettings)
+async def start_free_trial(
+    data: PlanChangeRequest,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Activate a one-time free trial (30 days) without payment.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه بدء التجربة المجانية.")
+
+    plan_key = data.plan_key
+    if plan_key not in PLANS:
+        raise HTTPException(status_code=400, detail="الخطة غير معروفة.")
+    if plan_key != FREE_TRIAL_PLAN_KEY:
+        raise HTTPException(
+            status_code=400,
+            detail="الشهر المجاني متاح فقط للخطة الأساسية.",
+        )
+
+    company = await refresh_trial_subscription_state(current_user.id)
+    if company.get("is_subscribed", False):
+        raise HTTPException(status_code=400, detail="لديك اشتراك نشط بالفعل.")
+    if company.get("trial_used", False):
+        raise HTTPException(status_code=400, detail="تم استخدام الشهر المجاني مسبقًا لهذا الحساب.")
+
+    updated = await start_company_free_trial_db(current_user.id, plan_key, trial_days=30)
+    if not updated:
+        raise HTTPException(status_code=400, detail="تعذر بدء التجربة المجانية.")
+    return company_settings_response(updated)
+
+
 @app.post("/settings/subdomain/check", response_model=SubdomainCheckResponse)
 async def check_subdomain(
     data: SubdomainRequest,
@@ -782,7 +861,7 @@ async def update_subdomain(
     """
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه إدارة السب دومين.")
-    company = await get_or_create_company_for_owner(current_user.id)
+    company = await refresh_trial_subscription_state(current_user.id)
     plan_dict = get_plan(company.get("plan_key", "starter"))
 
     if not plan_dict.get("allow_custom_subdomain", False):
@@ -1085,7 +1164,7 @@ async def create_property_endpoint(
             status_code=400,
             detail="لا يمكن تحديد شركة الحساب الحالي.",
         )
-    company_for_plan = await get_or_create_company_for_owner(owner_id_for_plan)
+    company_for_plan = await refresh_trial_subscription_state(owner_id_for_plan)
     if not company_for_plan.get("is_subscribed", False):
         raise HTTPException(
             status_code=403,
@@ -1373,6 +1452,8 @@ async def list_properties_endpoint(
     """
     # Owner sees all properties for his company; employee sees same company properties
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not await can_view_company_properties(owner_id):
+        return []
     query = {"owner_id": owner_id}
     if city:
         query["city"] = city
@@ -1402,7 +1483,7 @@ async def list_cities_endpoint(current_user: UserPublic = Depends(get_current_us
     Get a list of all unique cities.
     """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
+    if not await can_view_company_properties(owner_id):
         return []
     cities = await get_all_cities(owner_id)
     return cities
@@ -1413,7 +1494,7 @@ async def list_neighborhoods_endpoint(city: Optional[str] = None, current_user: 
     Get a list of all unique neighborhoods, optionally filtered by city.
     """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
+    if not await can_view_company_properties(owner_id):
         return []
     neighborhoods = await get_all_neighborhoods(owner_id, city)
     return neighborhoods
@@ -1441,6 +1522,8 @@ async def search_properties_endpoint(
         ]
     }
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not await can_view_company_properties(owner_id):
+        return []
     search_query["owner_id"] = owner_id
     properties = await get_properties(search_query)
     return properties
@@ -1458,10 +1541,12 @@ async def ai_search_properties_endpoint(
     """
     text = q.strip()
     query: dict = {}
+    owner_id_for_user = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not await can_view_company_properties(owner_id_for_user):
+        return []
 
     # Try to infer city name from known cities in the DB
     try:
-        owner_id_for_user = current_user.id if current_user.role == "owner" else current_user.company_owner_id
         if not owner_id_for_user:
             cities = []
         else:

@@ -124,6 +124,7 @@ class CompanySettings(BaseModel):
     subscription_ends_at: Optional[datetime] = None
     billing_status: Optional[str] = None
     cancel_at_period_end: bool = False
+    trial_used: bool = False
 
 
 class CompanySettingsUpdate(BaseModel):

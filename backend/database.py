@@ -351,6 +351,7 @@ def company_helper(company: Dict[str, Any]) -> dict:
         "subscription_ends_at": company.get("subscription_ends_at"),
         "billing_status": company.get("billing_status"),
         "cancel_at_period_end": company.get("cancel_at_period_end", False),
+        "trial_used": company.get("trial_used", False),
         "stripe_customer_id": company.get("stripe_customer_id"),
         "stripe_subscription_id": company.get("stripe_subscription_id"),
         "created_at": company.get("created_at"),
@@ -386,6 +387,7 @@ async def get_or_create_company_for_owner(owner_user_id: str) -> dict:
         "subscription_ends_at": None,
         "billing_status": None,
         "cancel_at_period_end": False,
+        "trial_used": False,
         "stripe_customer_id": None,
         "stripe_subscription_id": None,
         "created_at": now,
@@ -433,6 +435,41 @@ async def set_company_plan_db(owner_user_id: str, plan_key: str) -> Optional[dic
                 "subscription_ends_at": ends_at,
                 "billing_status": "active",
                 "cancel_at_period_end": False,
+                "updated_at": now,
+            }
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    return company_helper(updated) if updated else None
+
+
+async def start_company_free_trial_db(
+    owner_user_id: str,
+    plan_key: str,
+    *,
+    trial_days: int = 30,
+) -> Optional[dict]:
+    """
+    Activate one free trial per company for the selected plan.
+    """
+    company = await get_or_create_company_for_owner(owner_user_id)
+    now = datetime.utcnow()
+    ends_at = now + timedelta(days=trial_days)
+
+    updated = await company_collection.find_one_and_update(
+        {
+            "_id": ObjectId(company["id"]),
+            "trial_used": {"$ne": True},
+        },
+        {
+            "$set": {
+                "plan_key": plan_key,
+                "is_subscribed": True,
+                "subscription_started_at": now,
+                "subscription_ends_at": ends_at,
+                "billing_status": "trialing",
+                "cancel_at_period_end": True,
+                "trial_used": True,
                 "updated_at": now,
             }
         },

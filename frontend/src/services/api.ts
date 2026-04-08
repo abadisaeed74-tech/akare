@@ -107,6 +107,7 @@ export interface CompanySettings {
   subscription_ends_at?: string | null;
   billing_status?: string | null;
   cancel_at_period_end?: boolean;
+  trial_used?: boolean;
 }
 
 export interface TeamUser {
@@ -236,6 +237,11 @@ export const changePlan = async (plan_key: string): Promise<PlanUsage> => {
 
 export const activateSubscription = async (plan_key: string): Promise<CompanySettings> => {
   const response = await apiClient.post('/billing/activate-subscription', { plan_key });
+  return response.data;
+};
+
+export const startFreeTrial = async (plan_key: string): Promise<CompanySettings> => {
+  const response = await apiClient.post('/billing/start-free-trial', { plan_key });
   return response.data;
 };
 

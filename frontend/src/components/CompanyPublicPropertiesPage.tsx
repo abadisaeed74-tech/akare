@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Typography, Spin, Alert, List, Tag, Button, Image, Carousel, message, Avatar } from 'antd';
+import { Card, Typography, Spin, Alert, List, Button, Image, Carousel, message, Avatar } from 'antd';
 import Search from 'antd/es/input/Search';
 import type { Property, PublicCompany } from '../services/api';
 import { getPublicCompany, getPublicCompanyProperties, publicCompanyAiSearch, resolveMediaUrl } from '../services/api';
@@ -234,19 +234,6 @@ const CompanyPublicPropertiesPage: React.FC = () => {
                         }}
                       />
                     )}
-                    <Tag
-                      color="orange"
-                      style={{
-                        position: 'absolute',
-                        top: 12,
-                        right: 12,
-                        borderRadius: 999,
-                        padding: '0 10px',
-                        fontWeight: 500,
-                      }}
-                    >
-                      عرض متاح
-                    </Tag>
                   </div>
 
                   <div

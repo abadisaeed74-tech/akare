@@ -9,7 +9,15 @@ import {
     MoonOutlined,
     SunOutlined,
 } from '@ant-design/icons';
-import { Property, getProperties, aiSearchProperties, UserPublic, getCurrentUser, setAuthToken } from './services/api';
+import {
+    Property,
+    getProperties,
+    aiSearchProperties,
+    UserPublic,
+    getCurrentUser,
+    getPublicCompany,
+    setAuthToken,
+} from './services/api';
 import PropertyForm from './components/PropertyForm';
 import NavigationTree from './components/NavigationTree';
 import PropertyList from './components/PropertyList';
@@ -24,6 +32,7 @@ const App: React.FC = () => {
     const [loading, setLoading] = useState<boolean>(true);
     const [filters, setFilters] = useState<object>({});
     const [currentUser, setCurrentUser] = useState<UserPublic | null>(null);
+    const [companyName, setCompanyName] = useState<string>('');
     const [siderCollapsed, setSiderCollapsed] = useState<boolean>(false);
     const [treeReloadKey, setTreeReloadKey] = useState<number>(0);
     const [mode, setMode] = useState<'light' | 'dark'>(() => {
@@ -60,8 +69,20 @@ const App: React.FC = () => {
             try {
                 const user = await getCurrentUser();
                 setCurrentUser(user);
+                const ownerId = user.role === 'owner' ? user.id : user.company_owner_id;
+                if (ownerId) {
+                    try {
+                        const company = await getPublicCompany(ownerId);
+                        setCompanyName(company.company_name || '');
+                    } catch {
+                        setCompanyName('');
+                    }
+                } else {
+                    setCompanyName('');
+                }
             } catch {
                 setCurrentUser(null);
+                setCompanyName('');
                 setAuthToken(null);
                 navigate('/auth', { replace: true });
             }
@@ -172,7 +193,9 @@ const App: React.FC = () => {
             >
                 <div style={{ padding: '16px', textAlign: 'center', borderBottom: palette.glassBorder }}>
                     <Title level={4} style={{ color: palette.text, margin: 0 }}>عقاري</Title>
-                    <Text style={{ color: palette.textMuted, fontSize: 12 }}>لوحة تحكم المكتب العقاري</Text>
+                    <Text style={{ color: palette.textMuted, fontSize: 12 }}>
+                        {companyName || 'لوحة تحكم المكتب العقاري'}
+                    </Text>
                 </div>
                 <div style={{ padding: 8 }}>
                     <NavigationTree onSelect={handleSelectInTree} reloadKey={treeReloadKey} darkMode={isDark} />
@@ -222,17 +245,23 @@ const App: React.FC = () => {
                                 }}
                                 aria-label="إظهار أو إخفاء القائمة الجانبية"
                             />
-                            <Title
-                                level={3}
-                                style={{
-                                    color: palette.text,
-                                    margin: 0,
-                                    whiteSpace: 'nowrap',
-                                    fontSize: 20,
-                                }}
-                            >
-                                نظام إدارة العروض العقارية
-                            </Title>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                                <Title
+                                    level={3}
+                                    style={{
+                                        color: palette.text,
+                                        margin: 0,
+                                        whiteSpace: 'nowrap',
+                                        fontSize: 20,
+                                        lineHeight: 1.15,
+                                    }}
+                                >
+                                    نظام إدارة العروض العقارية
+                                </Title>
+                                <Text style={{ color: palette.textMuted, fontSize: 12 }}>
+                                    إجمالي العروض: {properties.length}
+                                </Text>
+                            </div>
                         </div>
                         <div
                             style={{

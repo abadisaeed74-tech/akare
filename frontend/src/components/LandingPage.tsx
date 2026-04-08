@@ -198,7 +198,12 @@ const LandingPage: React.FC = () => {
               <Button
                 icon={isDark ? <SunOutlined /> : <MoonOutlined />}
                 onClick={() => setMode(isDark ? 'light' : 'dark')}
-                style={{ color: palette.text }}
+                style={{
+                  color: palette.text,
+                  border: palette.chipBorder,
+                  background: isDark ? 'rgba(30, 41, 59, 0.82)' : '#ffffff',
+                  fontWeight: 600,
+                }}
               >
                 {isDark ? 'الوضع النهاري' : 'الوضع الليلي'}
               </Button>
