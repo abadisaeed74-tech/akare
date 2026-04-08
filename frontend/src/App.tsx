@@ -26,18 +26,21 @@ const App: React.FC = () => {
     const [currentUser, setCurrentUser] = useState<UserPublic | null>(null);
     const [siderCollapsed, setSiderCollapsed] = useState<boolean>(false);
     const [treeReloadKey, setTreeReloadKey] = useState<number>(0);
-    const [mode, setMode] = useState<'light' | 'dark'>('dark');
+    const [mode, setMode] = useState<'light' | 'dark'>(() => {
+        if (typeof window === 'undefined') return 'light';
+        const savedMode = window.localStorage.getItem('akare_theme_mode');
+        return savedMode === 'dark' ? 'dark' : 'light';
+    });
     const navigate = useNavigate();
 
     useEffect(() => {
-        const savedMode = window.localStorage.getItem('akare_theme_mode');
-        if (savedMode === 'light' || savedMode === 'dark') {
-            setMode(savedMode);
-        }
-    }, []);
-
-    useEffect(() => {
         window.localStorage.setItem('akare_theme_mode', mode);
+        document.body.classList.toggle('akare-dark', mode === 'dark');
+        document.body.classList.toggle('akare-light', mode === 'light');
+        return () => {
+            document.body.classList.remove('akare-dark');
+            document.body.classList.remove('akare-light');
+        };
     }, [mode]);
 
     const fetchAndSetProperties = useCallback(async () => {

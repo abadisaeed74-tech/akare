@@ -17,7 +17,7 @@ const AuthPage: React.FC = () => {
     setActiveTab(mode === 'register' ? 'register' : 'login');
   }, [mode]);
 
-  const handleRegister = async (values: { email: string; password: string; gemini_api_key?: string }) => {
+  const handleRegister = async (values: { email: string; password: string }) => {
     try {
       await registerUser(values);
       message.success('تم إنشاء الحساب بنجاح، قم بتسجيل الدخول الآن.');
@@ -95,9 +95,6 @@ const AuthPage: React.FC = () => {
                     rules={[{ required: true, message: 'الرجاء إدخال كلمة المرور' }]}
                   >
                     <Input.Password />
-                  </Form.Item>
-                  <Form.Item label="مفتاح Gemini (اختياري)" name="gemini_api_key">
-                    <Input.Password placeholder="ضع مفتاح Gemini الخاص بمكتبك" />
                   </Form.Item>
                   <Form.Item>
                     <Button type="primary" htmlType="submit" block>

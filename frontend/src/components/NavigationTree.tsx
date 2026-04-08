@@ -177,6 +177,10 @@ const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey, da
                         size="small"
                         icon={<EditOutlined />}
                         onClick={() => setShowDelete((prev) => !prev)}
+                        style={{
+                            color: darkMode && !showDelete ? '#e2e8f0' : undefined,
+                            borderColor: darkMode && showDelete ? 'rgba(148,163,184,0.35)' : undefined,
+                        }}
                     />
                 </Tooltip>
             </div>

@@ -122,6 +122,8 @@ class CompanySettings(BaseModel):
     is_subscribed: bool = False
     subscription_started_at: Optional[datetime] = None
     subscription_ends_at: Optional[datetime] = None
+    billing_status: Optional[str] = None
+    cancel_at_period_end: bool = False
 
 
 class CompanySettingsUpdate(BaseModel):
@@ -147,6 +149,21 @@ class SettingsOverview(BaseModel):
 
 class PlanChangeRequest(BaseModel):
     plan_key: str
+
+
+class CheckoutSessionRequest(BaseModel):
+    plan_key: str
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
+
+class CheckoutSessionResponse(BaseModel):
+    url: str
+    session_id: Optional[str] = None
+
+
+class PortalSessionResponse(BaseModel):
+    url: str
 
 
 class SubdomainRequest(BaseModel):

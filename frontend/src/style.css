@@ -61,6 +61,32 @@ body {
   color: #cbd5e1 !important;
 }
 
+/* Tree readability in dark dashboard (cities / neighborhoods) */
+.dashboard-dark .ant-tree {
+  color: #e2e8f0 !important;
+}
+
+.dashboard-dark .ant-tree .ant-tree-switcher,
+.dashboard-dark .ant-tree .ant-tree-switcher-icon {
+  color: #94a3b8 !important;
+}
+
+.dashboard-dark .ant-tree .ant-tree-node-content-wrapper {
+  border-radius: 8px !important;
+  color: #e2e8f0 !important;
+}
+
+.dashboard-dark .ant-tree .ant-tree-node-content-wrapper:hover {
+  background: rgba(51, 65, 85, 0.6) !important;
+  color: #f8fafc !important;
+}
+
+.dashboard-dark .ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.42), rgba(14, 165, 233, 0.28)) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(96, 165, 250, 0.5) !important;
+}
+
 .dashboard-dark .ant-input,
 .dashboard-dark .ant-input-affix-wrapper,
 .dashboard-dark .ant-input-number,
@@ -74,5 +100,120 @@ body {
 .dashboard-dark .ant-input::placeholder,
 .dashboard-dark .ant-input-textarea textarea::placeholder {
   color: #94a3b8 !important;
+}
+
+/* Alert readability in dark dashboard (upgrade notice وغيره) */
+.dashboard-dark .ant-alert {
+  background: rgba(250, 204, 21, 0.12) !important;
+  border: 1px solid rgba(250, 204, 21, 0.35) !important;
+}
+
+.dashboard-dark .ant-alert-message,
+.dashboard-dark .ant-alert-description,
+.dashboard-dark .ant-alert-content {
+  color: #f8fafc !important;
+}
+
+/* General dark-mode contrast improvements across dashboard components */
+.dashboard-dark .ant-btn:not(.ant-btn-primary):not(.ant-btn-dangerous) {
+  color: #e2e8f0 !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+}
+
+.dashboard-dark .ant-btn-text:hover,
+.dashboard-dark .ant-btn-default:hover {
+  color: #ffffff !important;
+  background: rgba(51, 65, 85, 0.55) !important;
+}
+
+.dashboard-dark .ant-tag {
+  color: #e2e8f0 !important;
+  background: rgba(30, 41, 59, 0.7) !important;
+  border-color: rgba(148, 163, 184, 0.35) !important;
+}
+
+.dashboard-dark .ant-tabs-tab .ant-tabs-tab-btn {
+  color: #cbd5e1 !important;
+}
+
+.dashboard-dark .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #f8fafc !important;
+}
+
+.dashboard-dark .ant-descriptions-view {
+  background: rgba(15, 23, 42, 0.55) !important;
+  border-color: rgba(148, 163, 184, 0.3) !important;
+}
+
+.dashboard-dark .ant-table {
+  color: #e2e8f0 !important;
+  background: rgba(15, 23, 42, 0.45) !important;
+}
+
+.dashboard-dark .ant-table-thead > tr > th {
+  color: #f8fafc !important;
+  background: rgba(30, 41, 59, 0.75) !important;
+  border-bottom-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+.dashboard-dark .ant-table-tbody > tr > td {
+  color: #e2e8f0 !important;
+  background: transparent !important;
+  border-bottom-color: rgba(148, 163, 184, 0.2) !important;
+}
+
+.dashboard-dark .ant-table-tbody > tr:hover > td {
+  background: rgba(51, 65, 85, 0.45) !important;
+}
+
+.dashboard-dark .ant-progress-text {
+  color: #f8fafc !important;
+}
+
+/* Modal readability in dark mode (portal rendered in body) */
+body.akare-dark .ant-modal-content {
+  background: #1e293b !important;
+  color: #f8fafc !important;
+  border: 1px solid rgba(148, 163, 184, 0.35) !important;
+}
+
+body.akare-dark .ant-modal-header {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25) !important;
+}
+
+body.akare-dark .ant-modal-footer {
+  border-top: 1px solid rgba(148, 163, 184, 0.25) !important;
+}
+
+body.akare-dark .ant-modal-title,
+body.akare-dark .ant-modal .ant-typography,
+body.akare-dark .ant-modal p,
+body.akare-dark .ant-modal span,
+body.akare-dark .ant-modal li,
+body.akare-dark .ant-modal a {
+  color: #f8fafc !important;
+}
+
+/* Portaled popups/dropdowns in dark mode */
+body.akare-dark .ant-select-dropdown,
+body.akare-dark .ant-dropdown-menu,
+body.akare-dark .ant-picker-dropdown .ant-picker-panel-container,
+body.akare-dark .ant-tooltip .ant-tooltip-inner,
+body.akare-dark .ant-popover .ant-popover-inner {
+  background: #1e293b !important;
+  color: #f8fafc !important;
+  border: 1px solid rgba(148, 163, 184, 0.35) !important;
+}
+
+body.akare-dark .ant-select-item,
+body.akare-dark .ant-dropdown-menu-item {
+  color: #e2e8f0 !important;
+}
+
+body.akare-dark .ant-select-item-option-active,
+body.akare-dark .ant-dropdown-menu-item:hover {
+  background: rgba(51, 65, 85, 0.55) !important;
+  color: #ffffff !important;
 }
 

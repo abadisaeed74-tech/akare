@@ -1,31 +1,70 @@
 import os
 import json
+import time
 from google import genai  # updated import for the google-genai client
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Default API key from environment (used if the user doesn't have a personal key)
+# Platform-wide API key from environment (shared across all accounts)
 default_api_key = os.getenv("GEMINI_API_KEY")
 
 # Get the Gemini model name (configurable via .env to avoid hard‑coding)
 model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+fallback_models = [
+    m.strip()
+    for m in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-2.5-flash").split(",")
+    if m.strip()
+]
+try:
+    max_retries_per_model = max(1, int(os.getenv("AI_MODEL_MAX_RETRIES", "1")))
+except ValueError:
+    max_retries_per_model = 1
 
 
 def _get_gemini_client(api_key_override: str | None = None) -> genai.Client:
     """
-    Returns a Gemini client using either:
-      - the per-user api_key_override (gemini_api_key from the user), or
-      - the default GEMINI_API_KEY from the environment.
+    Returns a Gemini client using the platform-level GEMINI_API_KEY only.
+    The api_key_override argument is intentionally ignored to enforce
+    a single shared key for the whole platform.
     """
-    api_key = api_key_override or default_api_key
+    _ = api_key_override
+    api_key = default_api_key
     if not api_key:
         raise ValueError(
             "No Gemini API key configured. "
-            "Set GEMINI_API_KEY in the environment or configure gemini_api_key for the user."
+            "Set GEMINI_API_KEY in the environment."
         )
     return genai.Client(api_key=api_key)
+
+
+def _generate_with_retry(client: genai.Client, prompt: str):
+    """
+    Use primary model then fallback models, with retry for transient 503 errors.
+    """
+    candidates = [model_name] + [m for m in fallback_models if m != model_name]
+    last_error: Exception | None = None
+
+    for candidate_model in candidates:
+        for attempt in range(max_retries_per_model):
+            try:
+                return client.models.generate_content(
+                    model=candidate_model,
+                    contents=prompt,
+                )
+            except Exception as e:
+                last_error = e
+                msg = str(e)
+                transient = ("UNAVAILABLE" in msg) or ("503" in msg)
+                if transient and attempt < (max_retries_per_model - 1):
+                    time.sleep(0.8 * (2 ** attempt))
+                    continue
+                break
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Failed to generate AI response.")
 
 def process_real_estate_text(text: str, api_key: str | None = None) -> dict:
     """
@@ -85,12 +124,8 @@ def process_real_estate_text(text: str, api_key: str | None = None) -> dict:
 
     try:
         # Call the Gemini model using the new google-genai client
-        # Prefer per-user key over the default environment key
         client = _get_gemini_client(api_key)
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
+        response = _generate_with_retry(client, prompt)
         # Clean the response to get only the JSON part
         text_response = getattr(response, "text", "")
         json_text = text_response.strip().replace("```json", "").replace("```", "").strip()
@@ -169,10 +204,7 @@ def process_search_text(text: str, api_key: str | None = None) -> dict:
 
     try:
         client = _get_gemini_client(api_key)
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-        )
+        response = _generate_with_retry(client, prompt)
         text_response = getattr(response, "text", "")
         json_text = text_response.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(json_text)

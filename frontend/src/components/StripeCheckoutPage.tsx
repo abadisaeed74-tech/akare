@@ -1,14 +1,31 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Typography, Spin, Alert, Button, Descriptions, message } from 'antd';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getSettingsOverview, activateSubscription, type SettingsOverview } from '../services/api';
+import {
+  getSettingsOverview,
+  createStripeCheckoutSession,
+  createStripePortalSession,
+  confirmStripeCheckoutSession,
+  type SettingsOverview,
+} from '../services/api';
 
 const { Title, Text } = Typography;
+
+const PLAN_CATALOG: Record<
+  string,
+  { key: string; name: string; price_monthly_sar?: number | null }
+> = {
+  starter: { key: 'starter', name: 'خطة المكاتب الصغيرة', price_monthly_sar: 99 },
+  business: { key: 'business', name: 'خطة المكاتب المتوسطة', price_monthly_sar: 249 },
+  enterprise: { key: 'enterprise', name: 'خطة الشركات', price_monthly_sar: 799 },
+};
 
 const StripeCheckoutPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [overview, setOverview] = useState<SettingsOverview | null>(null);
+  const [redirecting, setRedirecting] = useState(false);
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -27,6 +44,32 @@ const StripeCheckoutPage: React.FC = () => {
     load();
   }, []);
 
+  useEffect(() => {
+    const statusFromQuery = searchParams.get('status');
+    const sessionId = searchParams.get('session_id');
+    if (statusFromQuery !== 'success' || !sessionId) {
+      return;
+    }
+
+    const confirm = async () => {
+      try {
+        setConfirmingPayment(true);
+        await confirmStripeCheckoutSession(sessionId);
+        const refreshed = await getSettingsOverview();
+        setOverview(refreshed);
+        message.success('تم تأكيد الدفع وتفعيل الاشتراك بنجاح.');
+      } catch (e: any) {
+        const detail =
+          e?.response?.data?.detail || 'تم الدفع لكن لم يتم تأكيد الاشتراك تلقائيًا بعد.';
+        message.warning(detail);
+      } finally {
+        setConfirmingPayment(false);
+      }
+    };
+
+    confirm();
+  }, [searchParams]);
+
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -44,10 +87,17 @@ const StripeCheckoutPage: React.FC = () => {
   }
 
   const planFromQuery = searchParams.get('plan');
+  const statusFromQuery = searchParams.get('status');
+  const activePlanKey = (planFromQuery || overview.plan_usage.plan.key || 'starter').toLowerCase();
   const activePlan =
-    planFromQuery && planFromQuery === overview.plan_usage.plan.key
+    PLAN_CATALOG[activePlanKey] ||
+    (activePlanKey === overview.plan_usage.plan.key
       ? overview.plan_usage.plan
-      : overview.plan_usage.plan;
+      : {
+          key: activePlanKey,
+          name: activePlanKey,
+          price_monthly_sar: undefined,
+        });
 
   return (
     <div
@@ -66,8 +116,32 @@ const StripeCheckoutPage: React.FC = () => {
           صفحة الدفع
         </Title>
         <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginBottom: 16 }}>
-          سيتم ربط الدفع لاحقًا مع Stripe بشكل كامل، هذه الصفحة تصميم مبدئي لتجربة التدفق.
+          سيتم تحويلك إلى صفحة Stripe الآمنة لإتمام الاشتراك.
         </Text>
+
+        {statusFromQuery === 'success' && (
+          <Alert
+            type="success"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="تمت عملية الدفع بنجاح"
+            description={
+              confirmingPayment
+                ? 'جاري تأكيد الاشتراك وتحديث الخطة...'
+                : 'إذا لم تتحدث الخطة مباشرة، انتظر لحظات حتى يستقبل النظام إشعار Stripe (Webhook).'
+            }
+          />
+        )}
+
+        {statusFromQuery === 'cancel' && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="تم إلغاء عملية الدفع"
+            description="يمكنك إعادة المحاولة في أي وقت."
+          />
+        )}
 
         <Descriptions bordered column={1} size="middle" style={{ marginBottom: 16 }}>
           <Descriptions.Item label="اسم المكتب">
@@ -87,26 +161,50 @@ const StripeCheckoutPage: React.FC = () => {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="دفع عبر Stripe (تجريبي)"
-          description="في النسخة القادمة سيتم تحويلك مباشرة إلى صفحة دفع Stripe الآمنة لإكمال عملية الاشتراك."
+          message="دفع عبر Stripe"
+          description="التجديد، الإلغاء، والترقية/التخفيض تتم من بوابة إدارة الفوترة في Stripe."
         />
 
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
           <Button
             type="primary"
             block
+            loading={redirecting}
             onClick={async () => {
               try {
-                await activateSubscription(activePlan.key);
-                message.success('تم تفعيل الاشتراك في الخطة بنجاح. سيتم ربط Stripe فعليًا في المرحلة القادمة.');
-                navigate('/settings');
+                setRedirecting(true);
+                const successUrl = `${window.location.origin}/billing/checkout?status=success&plan=${activePlan.key}&session_id={CHECKOUT_SESSION_ID}`;
+                const cancelUrl = `${window.location.origin}/billing/checkout?status=cancel&plan=${activePlan.key}`;
+                const session = await createStripeCheckoutSession({
+                  plan_key: activePlan.key,
+                  success_url: successUrl,
+                  cancel_url: cancelUrl,
+                });
+                window.location.href = session.url;
               } catch (e: any) {
                 const detail = e?.response?.data?.detail || 'فشل في تفعيل الاشتراك.';
                 message.error(detail);
+                setRedirecting(false);
               }
             }}
           >
             إكمال الدفع عبر Stripe
+          </Button>
+          <Button
+            block
+            onClick={async () => {
+              try {
+                const portal = await createStripePortalSession(
+                  `${window.location.origin}/settings`,
+                );
+                window.location.href = portal.url;
+              } catch (e: any) {
+                const detail = e?.response?.data?.detail || 'تعذّر فتح بوابة إدارة الفوترة.';
+                message.error(detail);
+              }
+            }}
+          >
+            إدارة الاشتراك
           </Button>
           <Button block onClick={() => navigate('/settings')}>
             الرجوع إلى الإعدادات

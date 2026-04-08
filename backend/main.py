@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
@@ -6,6 +6,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 import os
 import re
+import stripe
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from models import (
@@ -22,6 +23,9 @@ from models import (
     TeamUserPublic,
     SettingsOverview,
     PlanChangeRequest,
+    CheckoutSessionRequest,
+    CheckoutSessionResponse,
+    PortalSessionResponse,
     SubdomainRequest,
     SubdomainCheckResponse,
     EmployeeCreate,
@@ -54,6 +58,10 @@ from database import (
     update_employee_user,
     get_company_by_owner_id,
     update_company_plan_key,
+    set_company_stripe_customer_id,
+    get_company_by_stripe_customer_id,
+    update_company_billing_from_stripe,
+    consume_company_daily_ai_quota,
 )
 
 
@@ -97,6 +105,30 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+# ==== Stripe settings ====
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
+
+STRIPE_PRICE_IDS = {
+    "starter": os.getenv("STRIPE_PRICE_STARTER_MONTHLY", "").strip(),
+    "business": os.getenv("STRIPE_PRICE_BUSINESS_MONTHLY", "").strip(),
+    "enterprise": os.getenv("STRIPE_PRICE_ENTERPRISE_MONTHLY", "").strip(),
+}
+
+PRICE_ID_TO_PLAN_KEY = {
+    price_id: plan_key for plan_key, price_id in STRIPE_PRICE_IDS.items() if price_id
+}
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+# ==== AI settings ====
+try:
+    AI_DAILY_ANALYSIS_LIMIT = int(os.getenv("AI_DAILY_ANALYSIS_LIMIT", "30"))
+except ValueError:
+    AI_DAILY_ANALYSIS_LIMIT = 30
 
 
 def verify_password(plain_password, hashed_password):
@@ -212,6 +244,67 @@ def get_plan(key: str) -> Dict:
     return PLANS.get(key, PLANS["starter"])
 
 
+def company_settings_response(company: Dict) -> CompanySettings:
+    return CompanySettings(
+        company_name=company.get("company_name"),
+        logo_url=company.get("logo_url"),
+        official_email=company.get("official_email"),
+        contact_phone=company.get("contact_phone"),
+        subdomain=company.get("subdomain"),
+        plan_key=company.get("plan_key", "starter"),
+        is_subscribed=company.get("is_subscribed", False),
+        subscription_started_at=company.get("subscription_started_at"),
+        subscription_ends_at=company.get("subscription_ends_at"),
+        billing_status=company.get("billing_status"),
+        cancel_at_period_end=company.get("cancel_at_period_end", False),
+    )
+
+
+def ensure_stripe_ready(plan_key: Optional[str] = None) -> None:
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Stripe غير مهيأ. يرجى إضافة STRIPE_SECRET_KEY في إعدادات البيئة.",
+        )
+    if plan_key:
+        price_id = STRIPE_PRICE_IDS.get(plan_key)
+        if not price_id:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Stripe price id غير مهيأ للخطة: {plan_key}",
+            )
+
+
+def stripe_obj_to_dict(value):
+    if value is None:
+        return None
+
+    if isinstance(value, dict):
+        return {k: stripe_obj_to_dict(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [stripe_obj_to_dict(v) for v in value]
+
+    # Stripe objects may expose either to_dict_recursive() or to_dict()
+    for method_name in ("to_dict_recursive", "to_dict"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            try:
+                return stripe_obj_to_dict(method())
+            except Exception:
+                pass
+
+    # Fallback for mapping-like objects
+    items_method = getattr(value, "items", None)
+    if callable(items_method):
+        try:
+            return {k: stripe_obj_to_dict(v) for k, v in items_method()}
+        except Exception:
+            pass
+
+    return value
+
+
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
@@ -306,6 +399,8 @@ async def get_settings_overview(current_user: UserPublic = Depends(get_current_u
         is_subscribed=company.get("is_subscribed", False),
         subscription_started_at=company.get("subscription_started_at"),
         subscription_ends_at=company.get("subscription_ends_at"),
+        billing_status=company.get("billing_status"),
+        cancel_at_period_end=company.get("cancel_at_period_end", False),
     )
 
     return SettingsOverview(
@@ -331,17 +426,7 @@ async def update_company_settings(
         # Should not normally happen because get_or_create_company_for_owner always creates one
         raise HTTPException(status_code=404, detail="Company not found")
 
-    return CompanySettings(
-        company_name=updated.get("company_name"),
-        logo_url=updated.get("logo_url"),
-        official_email=updated.get("official_email"),
-        contact_phone=updated.get("contact_phone"),
-        subdomain=updated.get("subdomain"),
-        plan_key=updated.get("plan_key", "starter"),
-        is_subscribed=updated.get("is_subscribed", False),
-        subscription_started_at=updated.get("subscription_started_at"),
-        subscription_ends_at=updated.get("subscription_ends_at"),
-    )
+    return company_settings_response(updated)
 
 
 @app.get("/settings/plans", response_model=List[PlanInfo])
@@ -383,6 +468,248 @@ async def change_plan(
     )
 
 
+@app.post("/billing/checkout-session", response_model=CheckoutSessionResponse)
+async def create_checkout_session(
+    data: CheckoutSessionRequest,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Create a Stripe Checkout session for a new subscription.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه بدء عملية الدفع.")
+
+    plan_key = data.plan_key
+    if plan_key not in PLANS:
+        raise HTTPException(status_code=400, detail="الخطة غير معروفة.")
+    ensure_stripe_ready(plan_key)
+
+    company = await get_or_create_company_for_owner(current_user.id)
+    price_id = STRIPE_PRICE_IDS[plan_key]
+    success_url = data.success_url or f"{FRONTEND_BASE_URL}/billing/checkout?status=success"
+    cancel_url = data.cancel_url or f"{FRONTEND_BASE_URL}/billing/checkout?status=cancel"
+
+    stripe_customer_id = company.get("stripe_customer_id")
+    if stripe_customer_id:
+        customer_id = stripe_customer_id
+    else:
+        customer = stripe.Customer.create(
+            email=current_user.email,
+            metadata={"owner_user_id": current_user.id},
+        )
+        customer_id = customer["id"]
+        await set_company_stripe_customer_id(current_user.id, customer_id)
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        customer=customer_id,
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"owner_user_id": current_user.id, "plan_key": plan_key},
+        subscription_data={
+            "metadata": {"owner_user_id": current_user.id, "plan_key": plan_key}
+        },
+    )
+    return CheckoutSessionResponse(url=session["url"], session_id=session["id"])
+
+
+@app.post("/billing/portal-session", response_model=PortalSessionResponse)
+async def create_billing_portal_session(
+    return_url: Optional[str] = Query(None),
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Create a Stripe Billing Portal session for cancellation/upgrade/downgrade.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه إدارة الاشتراك.")
+    ensure_stripe_ready()
+    company = await get_or_create_company_for_owner(current_user.id)
+    stripe_customer_id = company.get("stripe_customer_id")
+    if not stripe_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="لا يوجد عميل Stripe مرتبط بهذا الحساب بعد. ابدأ الاشتراك أولاً.",
+        )
+
+    session = stripe.billing_portal.Session.create(
+        customer=stripe_customer_id,
+        return_url=return_url or f"{FRONTEND_BASE_URL}/settings",
+    )
+    return PortalSessionResponse(url=session["url"])
+
+
+@app.post("/billing/confirm-checkout-session", response_model=CompanySettings)
+async def confirm_checkout_session(
+    session_id: str = Query(..., min_length=3),
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Confirm checkout session on return from Stripe and sync company subscription state.
+    Useful when webhook is delayed/unavailable in local development.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه تأكيد الاشتراك.")
+    ensure_stripe_ready()
+
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        session = stripe_obj_to_dict(session)
+    except Exception:
+        raise HTTPException(status_code=400, detail="تعذّر قراءة جلسة الدفع من Stripe.")
+
+    if session.get("mode") != "subscription":
+        raise HTTPException(status_code=400, detail="جلسة Stripe ليست اشتراكًا.")
+    if session.get("payment_status") not in {"paid", "no_payment_required"}:
+        raise HTTPException(status_code=400, detail="الدفع لم يكتمل بعد.")
+
+    customer_id = session.get("customer")
+    subscription_id = session.get("subscription")
+    metadata = stripe_obj_to_dict(session.get("metadata", {}))
+    plan_key = metadata.get("plan_key")
+
+    if not subscription_id:
+        raise HTTPException(status_code=400, detail="لا يوجد اشتراك مرتبط بجلسة الدفع.")
+
+    try:
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription = stripe_obj_to_dict(subscription)
+    except Exception:
+        raise HTTPException(status_code=400, detail="تعذّر قراءة بيانات الاشتراك من Stripe.")
+
+    items = stripe_obj_to_dict(subscription.get("items", {}))
+    item_list = items.get("data") or [{}]
+    current_item = stripe_obj_to_dict(item_list[0])
+    price_dict = stripe_obj_to_dict(current_item.get("price", {}))
+    price_id = price_dict.get("id")
+    mapped_plan = PRICE_ID_TO_PLAN_KEY.get(price_id)
+    final_plan_key = mapped_plan or plan_key or "starter"
+
+    stripe_status = subscription.get("status")
+    cancel_at_period_end = bool(subscription.get("cancel_at_period_end", False))
+    current_period_start_unix = subscription.get("current_period_start")
+    current_period_end_unix = subscription.get("current_period_end")
+    is_subscribed = stripe_status in {"active", "trialing", "past_due"}
+
+    subscription_started_at = (
+        datetime.utcfromtimestamp(current_period_start_unix)
+        if current_period_start_unix
+        else None
+    )
+    subscription_ends_at = (
+        datetime.utcfromtimestamp(current_period_end_unix)
+        if current_period_end_unix
+        else None
+    )
+
+    updated = await update_company_billing_from_stripe(
+        current_user.id,
+        stripe_customer_id=customer_id,
+        stripe_subscription_id=subscription_id,
+        plan_key=final_plan_key,
+        billing_status=stripe_status,
+        cancel_at_period_end=cancel_at_period_end,
+        is_subscribed=is_subscribed,
+        subscription_started_at=subscription_started_at,
+        subscription_ends_at=subscription_ends_at,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company_settings_response(updated)
+
+
+@app.post("/billing/webhook")
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: Optional[str] = Header(None, alias="stripe-signature"),
+):
+    """
+    Stripe webhook endpoint to sync subscription state.
+    """
+    ensure_stripe_ready()
+    payload = await request.body()
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="Stripe webhook غير مهيأ. يرجى إضافة STRIPE_WEBHOOK_SECRET.",
+        )
+    if not stripe_signature:
+        raise HTTPException(status_code=400, detail="Missing Stripe signature header.")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, stripe_signature, STRIPE_WEBHOOK_SECRET)
+        event = stripe_obj_to_dict(event)
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature.")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+
+    event_type = event.get("type")
+    data_object = stripe_obj_to_dict(event.get("data", {}).get("object", {}))
+
+    if event_type == "checkout.session.completed":
+        metadata = stripe_obj_to_dict(data_object.get("metadata", {}))
+        owner_user_id = (
+            metadata.get("owner_user_id")
+            or data_object.get("client_reference_id")
+        )
+        customer_id = data_object.get("customer")
+        subscription_id = data_object.get("subscription")
+        plan_key = metadata.get("plan_key")
+        if owner_user_id:
+            await update_company_billing_from_stripe(
+                owner_user_id,
+                stripe_customer_id=customer_id,
+                stripe_subscription_id=subscription_id,
+                plan_key=plan_key,
+            )
+
+    if event_type in {
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }:
+        customer_id = data_object.get("customer")
+        company = await get_company_by_stripe_customer_id(customer_id) if customer_id else None
+        if company:
+            stripe_status = data_object.get("status")
+            cancel_at_period_end = bool(data_object.get("cancel_at_period_end", False))
+            current_period_end_unix = data_object.get("current_period_end")
+            current_period_start_unix = data_object.get("current_period_start")
+            items = stripe_obj_to_dict(data_object.get("items", {}))
+            item_list = items.get("data") or [{}]
+            current_item = stripe_obj_to_dict(item_list[0])
+            price_dict = stripe_obj_to_dict(current_item.get("price", {}))
+            price_id = price_dict.get("id")
+            plan_key = PRICE_ID_TO_PLAN_KEY.get(price_id) or company.get("plan_key")
+            is_subscribed = stripe_status in {"active", "trialing", "past_due"}
+
+            subscription_started_at = (
+                datetime.utcfromtimestamp(current_period_start_unix)
+                if current_period_start_unix
+                else None
+            )
+            subscription_ends_at = (
+                datetime.utcfromtimestamp(current_period_end_unix)
+                if current_period_end_unix
+                else None
+            )
+
+            await update_company_billing_from_stripe(
+                company["owner_user_id"],
+                stripe_subscription_id=data_object.get("id"),
+                plan_key=plan_key,
+                billing_status=stripe_status,
+                cancel_at_period_end=cancel_at_period_end,
+                is_subscribed=is_subscribed,
+                subscription_started_at=subscription_started_at,
+                subscription_ends_at=subscription_ends_at,
+            )
+
+    return {"received": True}
+
+
 @app.post("/billing/activate-subscription", response_model=CompanySettings)
 async def activate_subscription(
     data: PlanChangeRequest,
@@ -402,17 +729,7 @@ async def activate_subscription(
     if not updated:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    return CompanySettings(
-        company_name=updated.get("company_name"),
-        logo_url=updated.get("logo_url"),
-        official_email=updated.get("official_email"),
-        contact_phone=updated.get("contact_phone"),
-        subdomain=updated.get("subdomain"),
-        plan_key=updated.get("plan_key", "starter"),
-        is_subscribed=updated.get("is_subscribed", False),
-        subscription_started_at=updated.get("subscription_started_at"),
-        subscription_ends_at=updated.get("subscription_ends_at"),
-    )
+    return company_settings_response(updated)
 
 
 @app.post("/settings/subdomain/check", response_model=SubdomainCheckResponse)
@@ -483,17 +800,7 @@ async def update_subdomain(
     if not updated:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    return CompanySettings(
-        company_name=updated.get("company_name"),
-        logo_url=updated.get("logo_url"),
-        official_email=updated.get("official_email"),
-        contact_phone=updated.get("contact_phone"),
-        subdomain=updated.get("subdomain"),
-        plan_key=updated.get("plan_key", "starter"),
-        is_subscribed=updated.get("is_subscribed", False),
-        subscription_started_at=updated.get("subscription_started_at"),
-        subscription_ends_at=updated.get("subscription_ends_at"),
-    )
+    return company_settings_response(updated)
 
 
 @app.get("/settings/team/users", response_model=List[TeamUserPublic])
@@ -629,17 +936,7 @@ async def get_public_company(owner_id: str):
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    return CompanySettings(
-        company_name=company.get("company_name"),
-        logo_url=company.get("logo_url"),
-        official_email=company.get("official_email"),
-        contact_phone=company.get("contact_phone"),
-        subdomain=company.get("subdomain"),
-        plan_key=company.get("plan_key", "starter"),
-        is_subscribed=company.get("is_subscribed", False),
-        subscription_started_at=company.get("subscription_started_at"),
-        subscription_ends_at=company.get("subscription_ends_at"),
-    )
+    return company_settings_response(company)
 
 
 @app.get("/public/companies/{owner_id}/properties", response_model=List[Property])
@@ -667,7 +964,7 @@ async def public_company_ai_search(
 
     # Try to infer city name from known cities in the DB
     try:
-        cities = await get_all_cities()
+        cities = await get_all_cities(owner_id)
     except Exception:
         cities = []
 
@@ -728,7 +1025,8 @@ async def register_user(user_in: UserCreate):
         )
 
     hashed = get_password_hash(user_in.password)
-    user = await create_user(user_in.email, hashed, user_in.gemini_api_key)
+    # Registration always uses platform AI key; per-user key is ignored.
+    user = await create_user(user_in.email, hashed, None)
     return UserPublic(**user)
 
 
@@ -761,7 +1059,9 @@ async def update_my_gemini_key(
     gemini_api_key: Optional[str] = Query(None),
     current_user: UserPublic = Depends(get_current_user),
 ):
-    updated = await update_user_gemini_key(current_user.id, gemini_api_key)
+    # Enforce platform-wide shared key: per-user keys are disabled.
+    _ = gemini_api_key
+    updated = await update_user_gemini_key(current_user.id, None)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
     return UserPublic(**updated)
@@ -792,15 +1092,33 @@ async def create_property_endpoint(
             detail="لا يمكنك إضافة عروض جديدة قبل الاشتراك في إحدى الخطط. يرجى التوجه إلى صفحة الإعدادات لاختيار خطة مناسبة.",
         )
 
-    # Prefer the user's own Gemini key if configured; otherwise the backend default key is used.
+    # Enforce daily AI limit per company (owner account for employees).
+    quota = await consume_company_daily_ai_quota(owner_id_for_plan, AI_DAILY_ANALYSIS_LIMIT)
+    if not quota.get("allowed"):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"تم تجاوز الحد اليومي لتحليل الذكاء الاصطناعي ({quota.get('limit')} تحليل/يوم) "
+                "لهذا الحساب. حاول مرة أخرى غدًا."
+            ),
+        )
+
+    # Use platform-level Gemini key only (per-user key is disabled).
     processed_data = process_real_estate_text(
         property_input.raw_text,
-        api_key=current_user.gemini_api_key,
+        api_key=None,
     )
     if not processed_data or "error" in processed_data:
-        # If Gemini quota is exhausted or AI failed, fall back to a minimal property
+        # If Gemini quota is exhausted, key is blocked, or AI fails, fall back to a minimal property
         details = str(processed_data.get("details", ""))
-        if "RESOURCE_EXHAUSTED" in details:
+        if (
+            "RESOURCE_EXHAUSTED" in details
+            or "PERMISSION_DENIED" in details
+            or "reported as leaked" in details
+            or "UNAVAILABLE" in details
+            or "503" in details
+            or "high demand" in details
+        ):
             # Create a basic property record so the user can still save the offer
             processed_data = {
                 "city": "غير مذكور",
@@ -808,7 +1126,7 @@ async def create_property_endpoint(
                 "property_type": "غير مذكور",
                 "area": 0.0,
                 "price": 0.0,
-                "details": "تم إدخال العرض بدون تحليل آلي بسبب انتهاء حد الذكاء الاصطناعي.",
+                "details": "تم إدخال العرض بدون تحليل آلي بسبب مشكلة مؤقتة في خدمة الذكاء الاصطناعي.",
                 "owner_name": "غير مذكور",
                 "owner_contact_number": "غير مذكور",
                 "marketer_contact_number": "غير مذكور",
@@ -1018,7 +1336,7 @@ async def delete_properties_by_city_endpoint(
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه حذف جميع العروض في مدينة.")
     # Even if nothing is deleted, we silently succeed to simplify UX when cleaning the tree
-    await delete_properties_by_city(city)
+    await delete_properties_by_city(city, current_user.id)
     return None
 
 
@@ -1036,7 +1354,7 @@ async def delete_properties_by_neighborhood_endpoint(
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه حذف جميع العروض في حي.")
     # Even if nothing is deleted, we silently succeed to simplify UX when cleaning the tree
-    await delete_properties_by_neighborhood(city, neighborhood)
+    await delete_properties_by_neighborhood(city, neighborhood, current_user.id)
     return None
 
 @app.get("/properties", response_model=List[Property])
@@ -1083,7 +1401,10 @@ async def list_cities_endpoint(current_user: UserPublic = Depends(get_current_us
     """
     Get a list of all unique cities.
     """
-    cities = await get_all_cities()
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return []
+    cities = await get_all_cities(owner_id)
     return cities
 
 @app.get("/neighborhoods", response_model=List[str])
@@ -1091,7 +1412,10 @@ async def list_neighborhoods_endpoint(city: Optional[str] = None, current_user: 
     """
     Get a list of all unique neighborhoods, optionally filtered by city.
     """
-    neighborhoods = await get_all_neighborhoods(city)
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return []
+    neighborhoods = await get_all_neighborhoods(owner_id, city)
     return neighborhoods
 
 @app.get("/search", response_model=List[Property])
@@ -1137,7 +1461,11 @@ async def ai_search_properties_endpoint(
 
     # Try to infer city name from known cities in the DB
     try:
-        cities = await get_all_cities()
+        owner_id_for_user = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+        if not owner_id_for_user:
+            cities = []
+        else:
+            cities = await get_all_cities(owner_id_for_user)
     except Exception:
         cities = []
 

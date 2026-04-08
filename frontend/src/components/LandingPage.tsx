@@ -21,22 +21,22 @@ const { Title, Text, Paragraph } = Typography;
 
 const featureCards = [
   {
-    icon: <ThunderboltOutlined style={{ fontSize: 22, color: '#1E3A8A' }} />,
+    icon: ThunderboltOutlined,
     title: 'تحليل ذكي بالعربية',
     desc: 'اكتب وصفك بأي أسلوب، والنظام يحوّله تلقائيًا إلى عرض عقاري منظم.',
   },
   {
-    icon: <GlobalOutlined style={{ fontSize: 22, color: '#1E3A8A' }} />,
+    icon: GlobalOutlined,
     title: 'موقع خاص لمكتبك',
     desc: 'صفحة عامة احترافية لمكتبك مع مشاركة الروابط للعملاء بسهولة.',
   },
   {
-    icon: <LockOutlined style={{ fontSize: 22, color: '#1E3A8A' }} />,
+    icon: LockOutlined,
     title: 'إدارة فريق بصلاحيات',
     desc: 'أنشئ حسابات للموظفين وحدد صلاحيات التعديل والحذف والمشاهدة.',
   },
   {
-    icon: <DatabaseOutlined style={{ fontSize: 22, color: '#1E3A8A' }} />,
+    icon: DatabaseOutlined,
     title: 'ملفات وسائط متكاملة',
     desc: 'ارفع صور وفيديو وملفات وموقع العقار ضمن بطاقة واحدة جاهزة للعرض.',
   },
@@ -75,15 +75,12 @@ const navItems = [
 
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<'light' | 'dark'>('dark');
-  const isDark = mode === 'dark';
-
-  useEffect(() => {
+  const [mode, setMode] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'light';
     const savedMode = window.localStorage.getItem('akare_theme_mode');
-    if (savedMode === 'light' || savedMode === 'dark') {
-      setMode(savedMode);
-    }
-  }, []);
+    return savedMode === 'dark' ? 'dark' : 'light';
+  });
+  const isDark = mode === 'dark';
 
   useEffect(() => {
     window.localStorage.setItem('akare_theme_mode', mode);
@@ -128,6 +125,7 @@ const LandingPage: React.FC = () => {
         text: '#0f172a',
         textMuted: '#475569',
       };
+  const iconAccent = isDark ? '#93c5fd' : '#1E3A8A';
 
   return (
     <div
@@ -183,8 +181,10 @@ const LandingPage: React.FC = () => {
                       alignItems: 'center',
                       justifyContent: 'center',
                       borderRadius: '50%',
-                      background: 'linear-gradient(145deg, rgba(30,58,138,0.15), rgba(56,189,248,0.14))',
-                      color: '#1E3A8A',
+                      background: isDark
+                        ? 'linear-gradient(145deg, rgba(59,130,246,0.28), rgba(14,165,233,0.24))'
+                        : 'linear-gradient(145deg, rgba(30,58,138,0.15), rgba(56,189,248,0.14))',
+                      color: iconAccent,
                       fontSize: 12,
                     }}
                   >
@@ -198,6 +198,7 @@ const LandingPage: React.FC = () => {
               <Button
                 icon={isDark ? <SunOutlined /> : <MoonOutlined />}
                 onClick={() => setMode(isDark ? 'light' : 'dark')}
+                style={{ color: palette.text }}
               >
                 {isDark ? 'الوضع النهاري' : 'الوضع الليلي'}
               </Button>
@@ -362,7 +363,7 @@ const LandingPage: React.FC = () => {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                {item.icon}
+                <item.icon style={{ fontSize: 22, color: iconAccent }} />
                 <Text strong style={{ fontSize: 18, color: palette.text }}>
                   {item.title}
                 </Text>

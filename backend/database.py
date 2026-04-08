@@ -104,22 +104,22 @@ async def delete_property_by_raw_text(raw_text: str) -> bool:
     return result.deleted_count == 1
 
 
-async def delete_properties_by_city(city: str) -> int:
+async def delete_properties_by_city(city: str, owner_id: str) -> int:
     """
     Delete all properties that belong to a given city.
     Returns the number of deleted documents.
     """
-    result = await property_collection.delete_many({"city": city})
+    result = await property_collection.delete_many({"city": city, "owner_id": owner_id})
     return result.deleted_count
 
 
-async def delete_properties_by_neighborhood(city: Optional[str], neighborhood: str) -> int:
+async def delete_properties_by_neighborhood(city: Optional[str], neighborhood: str, owner_id: str) -> int:
     """
     Delete all properties that belong to a given neighborhood.
     If city is provided, it will be used to narrow down the deletion.
     Returns the number of deleted documents.
     """
-    query: dict = {"neighborhood": neighborhood}
+    query: dict = {"neighborhood": neighborhood, "owner_id": owner_id}
     if city:
         query["city"] = city
     result = await property_collection.delete_many(query)
@@ -153,18 +153,18 @@ async def get_property_by_id(property_id: str) -> Optional[dict]:
     prop = await property_collection.find_one({"_id": oid})
     return property_helper(prop) if prop else None
 
-async def get_all_cities() -> List[str]:
+async def get_all_cities(owner_id: str) -> List[str]:
     """
     Retrieve a list of unique city names.
     """
-    cities = await property_collection.distinct("city")
+    cities = await property_collection.distinct("city", {"owner_id": owner_id})
     return cities
 
-async def get_all_neighborhoods(city: Optional[str] = None) -> List[str]:
+async def get_all_neighborhoods(owner_id: str, city: Optional[str] = None) -> List[str]:
     """
     Retrieve a list of unique neighborhood names, optionally filtered by city.
     """
-    query = {}
+    query: Dict[str, Any] = {"owner_id": owner_id}
     if city:
         query["city"] = city
     neighborhoods = await property_collection.distinct("neighborhood", query)
@@ -349,6 +349,10 @@ def company_helper(company: Dict[str, Any]) -> dict:
         "is_subscribed": company.get("is_subscribed", False),
         "subscription_started_at": company.get("subscription_started_at"),
         "subscription_ends_at": company.get("subscription_ends_at"),
+        "billing_status": company.get("billing_status"),
+        "cancel_at_period_end": company.get("cancel_at_period_end", False),
+        "stripe_customer_id": company.get("stripe_customer_id"),
+        "stripe_subscription_id": company.get("stripe_subscription_id"),
         "created_at": company.get("created_at"),
         "updated_at": company.get("updated_at"),
     }
@@ -380,6 +384,10 @@ async def get_or_create_company_for_owner(owner_user_id: str) -> dict:
         "is_subscribed": False,
         "subscription_started_at": None,
         "subscription_ends_at": None,
+        "billing_status": None,
+        "cancel_at_period_end": False,
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -423,6 +431,8 @@ async def set_company_plan_db(owner_user_id: str, plan_key: str) -> Optional[dic
                 "is_subscribed": True,
                 "subscription_started_at": now,
                 "subscription_ends_at": ends_at,
+                "billing_status": "active",
+                "cancel_at_period_end": False,
                 "updated_at": now,
             }
         },
@@ -450,6 +460,60 @@ async def update_company_plan_key(owner_user_id: str, plan_key: str) -> Optional
     return company_helper(updated) if updated else None
 
 
+async def set_company_stripe_customer_id(owner_user_id: str, stripe_customer_id: str) -> Optional[dict]:
+    company = await get_or_create_company_for_owner(owner_user_id)
+    updated = await company_collection.find_one_and_update(
+        {"_id": ObjectId(company["id"])},
+        {"$set": {"stripe_customer_id": stripe_customer_id, "updated_at": datetime.utcnow()}},
+        return_document=ReturnDocument.AFTER,
+    )
+    return company_helper(updated) if updated else None
+
+
+async def get_company_by_stripe_customer_id(stripe_customer_id: str) -> Optional[dict]:
+    company = await company_collection.find_one({"stripe_customer_id": stripe_customer_id})
+    return company_helper(company) if company else None
+
+
+async def update_company_billing_from_stripe(
+    owner_user_id: str,
+    *,
+    stripe_customer_id: Optional[str] = None,
+    stripe_subscription_id: Optional[str] = None,
+    plan_key: Optional[str] = None,
+    billing_status: Optional[str] = None,
+    cancel_at_period_end: Optional[bool] = None,
+    is_subscribed: Optional[bool] = None,
+    subscription_started_at: Optional[datetime] = None,
+    subscription_ends_at: Optional[datetime] = None,
+) -> Optional[dict]:
+    company = await get_or_create_company_for_owner(owner_user_id)
+    update_doc: Dict[str, Any] = {"updated_at": datetime.utcnow()}
+    if stripe_customer_id is not None:
+        update_doc["stripe_customer_id"] = stripe_customer_id
+    if stripe_subscription_id is not None:
+        update_doc["stripe_subscription_id"] = stripe_subscription_id
+    if plan_key is not None:
+        update_doc["plan_key"] = plan_key
+    if billing_status is not None:
+        update_doc["billing_status"] = billing_status
+    if cancel_at_period_end is not None:
+        update_doc["cancel_at_period_end"] = cancel_at_period_end
+    if is_subscribed is not None:
+        update_doc["is_subscribed"] = is_subscribed
+    if subscription_started_at is not None:
+        update_doc["subscription_started_at"] = subscription_started_at
+    if subscription_ends_at is not None:
+        update_doc["subscription_ends_at"] = subscription_ends_at
+
+    updated = await company_collection.find_one_and_update(
+        {"_id": ObjectId(company["id"])},
+        {"$set": update_doc},
+        return_document=ReturnDocument.AFTER,
+    )
+    return company_helper(updated) if updated else None
+
+
 async def get_company_by_subdomain(subdomain: str) -> Optional[dict]:
     company = await company_collection.find_one({"subdomain": subdomain})
     return company_helper(company) if company else None
@@ -463,4 +527,51 @@ async def set_company_subdomain_db(owner_user_id: str, subdomain: str) -> Option
         return_document=ReturnDocument.AFTER,
     )
     return company_helper(updated) if updated else None
+
+
+async def consume_company_daily_ai_quota(owner_user_id: str, daily_limit: int = 30) -> dict:
+    """
+    Consume one AI analysis from the company's daily quota.
+    Quota is tracked per owner/company by UTC date.
+    """
+    company = await get_or_create_company_for_owner(owner_user_id)
+    company_id = ObjectId(company["id"])
+    raw = await company_collection.find_one({"_id": company_id}) or {}
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    usage = raw.get("ai_daily_usage") or {}
+    usage_date = usage.get("date")
+    usage_count = usage.get("count", 0)
+    try:
+        usage_count = int(usage_count)
+    except Exception:
+        usage_count = 0
+
+    current_count = usage_count if usage_date == today else 0
+    if current_count >= daily_limit:
+        return {
+            "allowed": False,
+            "limit": daily_limit,
+            "used": current_count,
+            "remaining": 0,
+            "date": today,
+        }
+
+    next_count = current_count + 1
+    await company_collection.update_one(
+        {"_id": company_id},
+        {
+            "$set": {
+                "ai_daily_usage": {"date": today, "count": next_count},
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+    return {
+        "allowed": True,
+        "limit": daily_limit,
+        "used": next_count,
+        "remaining": max(daily_limit - next_count, 0),
+        "date": today,
+    }
 

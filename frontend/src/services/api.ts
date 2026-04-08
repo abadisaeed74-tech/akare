@@ -65,7 +65,6 @@ export interface Property {
 export interface UserPublic {
   id: string | null;
   email: string;
-  gemini_api_key?: string | null;
   role?: 'owner' | 'employee';
   status?: 'active' | 'disabled';
   company_owner_id?: string | null;
@@ -104,8 +103,10 @@ export interface CompanySettings {
   subdomain?: string;
   plan_key: string;
   is_subscribed?: boolean;
-   subscription_started_at?: string | null;
-   subscription_ends_at?: string | null;
+  subscription_started_at?: string | null;
+  subscription_ends_at?: string | null;
+  billing_status?: string | null;
+  cancel_at_period_end?: boolean;
 }
 
 export interface TeamUser {
@@ -194,7 +195,7 @@ export const deletePropertiesByNeighborhood = async (city: string | null, neighb
   await apiClient.delete('/properties/by-neighborhood', { params });
 };
 
-export const registerUser = async (data: { email: string; password: string; gemini_api_key?: string }): Promise<UserPublic> => {
+export const registerUser = async (data: { email: string; password: string }): Promise<UserPublic> => {
   const response = await apiClient.post('/auth/register', data);
   return response.data;
 };
@@ -211,11 +212,6 @@ export const loginUser = async (email: string, password: string): Promise<{ acce
 
 export const getCurrentUser = async (): Promise<UserPublic> => {
   const response = await apiClient.get('/me');
-  return response.data;
-};
-
-export const updateMyGeminiKey = async (gemini_api_key: string | null): Promise<UserPublic> => {
-  const response = await apiClient.put('/me/gemini-key', null, { params: { gemini_api_key } });
   return response.data;
 };
 
@@ -240,6 +236,33 @@ export const changePlan = async (plan_key: string): Promise<PlanUsage> => {
 
 export const activateSubscription = async (plan_key: string): Promise<CompanySettings> => {
   const response = await apiClient.post('/billing/activate-subscription', { plan_key });
+  return response.data;
+};
+
+export const createStripeCheckoutSession = async (payload: {
+  plan_key: string;
+  success_url?: string;
+  cancel_url?: string;
+}): Promise<{ url: string; session_id?: string | null }> => {
+  const response = await apiClient.post('/billing/checkout-session', payload);
+  return response.data;
+};
+
+export const createStripePortalSession = async (
+  returnUrl?: string,
+): Promise<{ url: string }> => {
+  const response = await apiClient.post('/billing/portal-session', null, {
+    params: { return_url: returnUrl },
+  });
+  return response.data;
+};
+
+export const confirmStripeCheckoutSession = async (
+  sessionId: string,
+): Promise<CompanySettings> => {
+  const response = await apiClient.post('/billing/confirm-checkout-session', null, {
+    params: { session_id: sessionId },
+  });
   return response.data;
 };
 

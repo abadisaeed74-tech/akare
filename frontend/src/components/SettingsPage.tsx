@@ -24,13 +24,13 @@ import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getCurrentUser,
-  updateMyGeminiKey,
   getSettingsOverview,
   updateCompanySettings,
   checkSubdomainAvailability,
   updateSubdomain,
   createEmployeeUser,
   updateEmployeeUser,
+  createStripePortalSession,
   uploadFile,
   resolveMediaUrl,
   type UserPublic,
@@ -105,16 +105,14 @@ const SettingsPage: React.FC = () => {
   const [companySettings, setCompanySettings] = useState<CompanySettings>(dummyCompany);
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>(dummyTeam);
   const [savingAccount, setSavingAccount] = useState(false);
-  const [savingGemini, setSavingGemini] = useState(false);
   const [checkingSubdomain, setCheckingSubdomain] = useState(false);
   const [subdomain, setSubdomain] = useState<string>('');
   const [subdomainStatus, setSubdomainStatus] = useState<null | { ok: boolean; message: string }>(null);
   const [subdomainModalVisible, setSubdomainModalVisible] = useState(false);
   const [isEmployeeModalVisible, setIsEmployeeModalVisible] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<TeamUser | null>(null);
-  const [selectedPlanKey, setSelectedPlanKey] = useState<string | null>(null);
   const navigate = useNavigate();
-  const [accountForm] = Form.useForm<CompanySettings & { gemini_api_key?: string }>();
+  const [accountForm] = Form.useForm<CompanySettings>();
   const [employeeForm] = Form.useForm<{
     email: string;
     password?: string;
@@ -136,14 +134,12 @@ const SettingsPage: React.FC = () => {
         setCompanySettings(overview.company);
         setTeamUsers(overview.team);
         setSubdomain(overview.company.subdomain || '');
-        setSelectedPlanKey(null);
 
         accountForm.setFieldsValue({
           company_name: overview.company.company_name,
           official_email: overview.company.official_email,
           contact_phone: overview.company.contact_phone,
           logo_url: overview.company.logo_url,
-          gemini_api_key: user.gemini_api_key || '',
         });
       } catch (e: any) {
         const status = e?.response?.status;
@@ -181,21 +177,6 @@ const SettingsPage: React.FC = () => {
       message.success('تم حفظ إعدادات الحساب بنجاح.');
     } finally {
       setSavingAccount(false);
-    }
-  };
-
-  const handleSaveGeminiKey = async () => {
-    try {
-      const gemini_api_key = accountForm.getFieldValue('gemini_api_key') || '';
-      setSavingGemini(true);
-      const user = await updateMyGeminiKey(gemini_api_key || null);
-      setCurrentUser(user);
-      message.success('تم تحديث مفتاح Gemini بنجاح.');
-    } catch (error: any) {
-      const detail = error?.response?.data?.detail || 'فشل في تحديث مفتاح Gemini.';
-      message.error(`خطأ: ${detail}`);
-    } finally {
-      setSavingGemini(false);
     }
   };
 
@@ -318,10 +299,6 @@ const SettingsPage: React.FC = () => {
 
   const renderPlansSection = () => {
     const effectiveSubscribedPlanKey = companySettings.plan_key || planUsage.plan.key;
-    const previewPlanKey = selectedPlanKey || effectiveSubscribedPlanKey;
-    const isSameAsSubscribed =
-      !!companySettings.is_subscribed && previewPlanKey === effectiveSubscribedPlanKey;
-
     const hasSubscription = !!companySettings.is_subscribed;
 
     // حساب قيم تبويب حالة الاشتراك
@@ -356,25 +333,37 @@ const SettingsPage: React.FC = () => {
           <Title level={4} style={{ margin: 0 }}>
             الخطط والاشتراكات
           </Title>
-          {/* الزر يظهر إذا لم يكن الحساب مشتركاً، أو إذا اختار المالك خطة مختلفة عن الخطة المشترَك فيها */}
-          {!isSameAsSubscribed && (
-            <Button
-              type="primary"
-              icon={<ArrowRightOutlined />}
-              onClick={() => {
-                // بعد اختيار الخطة الحالية، هذا الزر ينقل المالك إلى صفحة الدفع
-                // نمرر الخطة الحالية في كويري سترنج للاستخدام في صفحة الدفع
-                navigate(`/billing/checkout?plan=${previewPlanKey}`);
-              }}
-            >
-              اشترك الآن لتفعيل الحساب
-            </Button>
-          )}
+          <Space>
+            {hasSubscription && (
+              <Tag color={companySettings.billing_status === 'active' ? 'green' : 'orange'}>
+                حالة Stripe: {companySettings.billing_status || 'غير معروفة'}
+                {companySettings.cancel_at_period_end ? ' (سيتم الإلغاء نهاية الفترة)' : ''}
+              </Tag>
+            )}
+            {hasSubscription && (
+              <Button
+                onClick={async () => {
+                  try {
+                    const portal = await createStripePortalSession(
+                      `${window.location.origin}/settings`,
+                    );
+                    window.location.href = portal.url;
+                  } catch (e: any) {
+                    const detail =
+                      e?.response?.data?.detail || 'تعذّر فتح بوابة إدارة الفوترة.';
+                    message.error(detail);
+                  }
+                }}
+              >
+                إدارة الاشتراك (Stripe)
+              </Button>
+            )}
+          </Space>
         </div>
 
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
           {PLANS.map((plan) => {
-            const isCurrent = plan.key === previewPlanKey;
+            const isCurrent = plan.key === effectiveSubscribedPlanKey;
             return (
               <Card
                 key={plan.key}
@@ -404,15 +393,14 @@ const SettingsPage: React.FC = () => {
                     </Text>
                   </Text>
                   <Button
-                    type={isCurrent ? 'primary' : 'default'}
+                    type={isCurrent ? 'default' : 'primary'}
                     block
-                    disabled={isCurrent}
+                    disabled={isCurrent && hasSubscription}
                     onClick={() => {
-                      setSelectedPlanKey(plan.key);
-                      message.success(`تم اختيار "${plan.name}" كخطة مستهدفة. أكمل الدفع لتفعيل الاشتراك.`);
+                      navigate(`/billing/checkout?plan=${plan.key}`);
                     }}
                   >
-                    {isCurrent ? 'الخطة المحددة حالياً' : 'تعيين كخطة حالية'}
+                    {isCurrent && hasSubscription ? 'الخطة الحالية' : 'اشترك الآن'}
                   </Button>
                 </Space>
               </Card>
@@ -424,6 +412,10 @@ const SettingsPage: React.FC = () => {
           <Descriptions.Item label="الخطة الحالية">
             {planUsage.plan.name} ({planUsage.plan.key}){' '}
             {!companySettings.is_subscribed && <Text type="warning">(غير مفعّلة حتى الآن)</Text>}
+          </Descriptions.Item>
+          <Descriptions.Item label="حالة الفوترة">
+            {companySettings.billing_status || 'غير متوفر'}
+            {companySettings.cancel_at_period_end ? ' - سيتم الإلغاء نهاية الفترة' : ''}
           </Descriptions.Item>
           <Descriptions.Item label="عدد الموظفين">
             {planUsage.current_users} / {planUsage.plan.max_users}
@@ -577,7 +569,6 @@ const SettingsPage: React.FC = () => {
           official_email: companySettings.official_email,
           contact_phone: companySettings.contact_phone,
           logo_url: companySettings.logo_url,
-          gemini_api_key: currentUser?.gemini_api_key || '',
         }}
       >
         <Form.Item label="اسم الشركة" name="company_name">
@@ -633,9 +624,6 @@ const SettingsPage: React.FC = () => {
         <Form.Item label="البريد المسجل في النظام">
           <Input value={currentUser?.email} disabled />
         </Form.Item>
-        <Form.Item label="مفتاح Gemini المرتبط بالحساب" name="gemini_api_key">
-          <Input.Password placeholder="ضع أو حدّث مفتاح Gemini الخاص بمكتبك" />
-        </Form.Item>
         <Form.Item style={{ display: 'flex', justifyContent: 'space-between' }}>
           <div>
             <Button
@@ -645,9 +633,6 @@ const SettingsPage: React.FC = () => {
               style={{ marginLeft: 8 }}
             >
               حفظ إعدادات الشركة
-            </Button>
-            <Button onClick={handleSaveGeminiKey} loading={savingGemini}>
-              حفظ مفتاح Gemini
             </Button>
           </div>
           <Button onClick={handleBackToApp} icon={<ArrowRightOutlined />}>
@@ -852,12 +837,39 @@ const SettingsPage: React.FC = () => {
   const renderBillingSection = () => (
     <Card>
       <Title level={4}>الفوترة</Title>
-      <Space align="start">
-        <ExclamationCircleOutlined style={{ color: '#faad14', fontSize: 20 }} />
-        <Text type="secondary">
-          قسم الفوترة سيتم ربطه لاحقًا مع مزود دفع (مثل Stripe أو بوابات دفع محلية في السعودية) لعرض الفواتير
-          وتجديد الاشتراك.
-        </Text>
+      <Space align="start" direction="vertical" style={{ width: '100%' }}>
+        <Space align="start">
+          <ExclamationCircleOutlined style={{ color: '#faad14', fontSize: 20 }} />
+          <Text type="secondary">
+            إدارة الإلغاء، الترقية، التخفيض، وتحديث وسيلة الدفع تتم من بوابة Stripe الرسمية.
+          </Text>
+        </Space>
+        <Descriptions bordered column={1} size="small">
+          <Descriptions.Item label="الخطة الحالية">
+            {planUsage.plan.name} ({planUsage.plan.key})
+          </Descriptions.Item>
+          <Descriptions.Item label="حالة الفوترة">
+            {companySettings.billing_status || 'غير متوفر'}
+            {companySettings.cancel_at_period_end ? ' - سيتم الإلغاء نهاية الفترة' : ''}
+          </Descriptions.Item>
+        </Descriptions>
+        <Button
+          type="primary"
+          onClick={async () => {
+            try {
+              const portal = await createStripePortalSession(
+                `${window.location.origin}/settings`,
+              );
+              window.location.href = portal.url;
+            } catch (e: any) {
+              const detail =
+                e?.response?.data?.detail || 'تعذّر فتح بوابة إدارة الفوترة.';
+              message.error(detail);
+            }
+          }}
+        >
+          فتح بوابة Stripe لإدارة الفوترة
+        </Button>
       </Space>
     </Card>
   );
@@ -912,7 +924,7 @@ const SettingsPage: React.FC = () => {
             { key: 'subdomain', label: 'السب دومين' },
             { key: 'users', label: 'المستخدمون والموظفون' },
             { key: 'roles', label: 'الأدوار والصلاحيات' },
-            { key: 'billing', label: 'الفوترة (قريبًا)', disabled: true },
+            { key: 'billing', label: 'الفوترة' },
           ]}
         />
       </Sider>
