@@ -2,8 +2,6 @@ import React from 'react';
 import { Button, Card, Tag, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
-  CheckCircleOutlined,
-  CrownOutlined,
   DatabaseOutlined,
   GlobalOutlined,
   LockOutlined,
@@ -11,7 +9,6 @@ import {
   RocketOutlined,
   AppstoreOutlined,
   EyeOutlined,
-  DollarOutlined,
   PhoneOutlined,
 } from '@ant-design/icons';
 
@@ -40,34 +37,9 @@ const featureCards = [
   },
 ];
 
-const plans = [
-  {
-    name: 'الأساسية',
-    price: '99 ر.س',
-    period: '/شهريًا',
-    points: ['حتى 200 عرض', 'مستخدمان', 'دعم أساسي'],
-    highlight: false,
-  },
-  {
-    name: 'الأعمال',
-    price: '299 ر.س',
-    period: '/شهريًا',
-    points: ['حتى 3000 عرض', 'فريق كامل', 'ذكاء اصطناعي متقدم + صلاحيات'],
-    highlight: true,
-  },
-  {
-    name: 'الشركات',
-    price: 'حسب الطلب',
-    period: '',
-    points: ['عروض غير محدودة', 'تكاملات خاصة', 'مدير حساب مخصص'],
-    highlight: false,
-  },
-];
-
 const navItems = [
   { href: '#features', label: 'المميزات', icon: <AppstoreOutlined /> },
   { href: '#preview', label: 'عرض الشاشة', icon: <EyeOutlined /> },
-  { href: '#pricing', label: 'الأسعار', icon: <DollarOutlined /> },
   { href: '#contact', label: 'تواصل معنا', icon: <PhoneOutlined /> },
 ];
 
@@ -359,57 +331,6 @@ const LandingPage: React.FC = () => {
               </div>
             </div>
           </Card>
-        </div>
-
-        <div id="pricing" style={{ marginTop: 22 }}>
-          <Title level={3} style={{ marginBottom: 8, color: palette.text }}>
-            باقات مناسبة لكل حجم مكتب
-          </Title>
-          <Paragraph style={{ marginTop: 0, color: palette.textMuted }}>
-            اختر الخطة التي تناسب أعمالك وابدأ بإدارة عروضك باحتراف.
-          </Paragraph>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-            {plans.map((plan) => (
-              <Card
-                key={plan.name}
-                bordered={false}
-                style={{
-                  borderRadius: 16,
-                  border: plan.highlight ? '1px solid #3f7d3c' : '1px solid #e2e8f0',
-                  boxShadow: plan.highlight
-                    ? '0 18px 38px rgba(63,125,60,0.2)'
-                    : '0 10px 24px rgba(15,23,42,0.06)',
-                  transform: plan.highlight ? 'translateY(-4px)' : 'none',
-                  background: palette.surface,
-                }}
-              >
-                {plan.highlight && (
-                  <Tag color="green" icon={<CrownOutlined />} style={{ borderRadius: 999, marginBottom: 8 }}>
-                    الأكثر اختيارًا
-                  </Tag>
-                )}
-                <Title level={4} style={{ marginTop: 0, color: palette.text }}>{plan.name}</Title>
-                <Title level={2} style={{ margin: '0 0 2px', color: palette.text }}>{plan.price}</Title>
-                <Text style={{ color: palette.textMuted }}>{plan.period}</Text>
-                <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-                  {plan.points.map((p) => (
-                    <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <CheckCircleOutlined style={{ color: '#16a34a' }} />
-                      <Text style={{ color: palette.text }}>{p}</Text>
-                    </div>
-                  ))}
-                </div>
-                <Button
-                  type={plan.highlight ? 'primary' : 'default'}
-                  block
-                  style={{ marginTop: 14, ...(plan.highlight ? { background: '#3f7d3c' } : {}) }}
-                  onClick={() => navigate('/billing/checkout')}
-                >
-                  اشترك الآن
-                </Button>
-              </Card>
-            ))}
-          </div>
         </div>
 
         <Card
