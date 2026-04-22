@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Carousel, Image } from 'antd';
 import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, type UserPublic } from '../services/api';
+import { EyeOutlined } from '@ant-design/icons';
 
 const { Text, Paragraph } = Typography;
 
@@ -166,6 +167,14 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
         return `${value.toLocaleString()}${suffix ? ` ${suffix}` : ''}`;
     };
 
+    const isDark = (typeof document !== 'undefined' && document.body.classList.contains('akare-dark'));
+    const actionBtnBaseStyle: React.CSSProperties = {
+        borderRadius: 999,
+        height: 34,
+        width: '100%',
+        fontWeight: 600,
+    };
+
     return (
         <>
         <List
@@ -185,17 +194,20 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                         title={`${formatOrPlaceholder(property.property_type)} في ${formatOrPlaceholder(property.neighborhood)}`}
                         variant="borderless"
                         style={{
-                            boxShadow: '0 12px 28px rgba(15, 23, 42, 0.12)',
+                            boxShadow: '0 10px 24px rgba(41, 66, 49, 0.11)',
                             display: 'flex',
                             flexDirection: 'column',
-                            height: 500,
-                            borderRadius: 16,
+                            height: 540,
+                            borderRadius: 18,
+                            border: isDark ? '1px solid rgba(122,189,105,0.24)' : '1px solid #e2e7dd',
+                            background: isDark ? '#1b2a22' : '#fff',
                         }}
                         styles={{
                             body: {
                                 display: 'flex',
                                 flexDirection: 'column',
                                 height: '100%',
+                                padding: 14,
                             },
                         }}
                     >
@@ -203,16 +215,35 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                             style={{
                                 marginBottom: 12,
                                 position: 'relative',
-                                borderRadius: 8,
+                                borderRadius: 12,
                                 overflow: 'hidden',
                                 height: 200,
                             }}
                         >
+                            <div
+                                style={{
+                                    position: 'absolute',
+                                    top: 8,
+                                    right: 8,
+                                    zIndex: 2,
+                                    background: 'rgba(17, 24, 39, 0.58)',
+                                    color: '#fff',
+                                    borderRadius: 999,
+                                    padding: '3px 10px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    backdropFilter: 'blur(3px)',
+                                }}
+                            >
+                                <EyeOutlined />
+                                <span>{(property.view_count || 0).toLocaleString('ar-SA')}</span>
+                            </div>
                             {property.images && property.images.length > 0 ? (
                                 <Image.PreviewGroup>
-                                    <Carousel
-                                        arrows={true}
-                                    >
+                                    <Carousel>
                                         {property.images.map((url, index) => (
                                             <div
                                                 key={index}
@@ -252,12 +283,12 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                                 display: 'flex',
                                 flexDirection: 'column',
                                 gap: 4,
-                                height: 140,
+                                height: 126,
                                 overflow: 'hidden',
                             }}
                         >
                             <Paragraph style={{ marginBottom: 4 }}>
-                                <Tag color="blue">{formatOrPlaceholder(property.city)}</Tag>
+                                <Tag color="green">{formatOrPlaceholder(property.city)}</Tag>
                             </Paragraph>
                             <Paragraph style={{ marginBottom: 4 }}>
                                 <Text strong>المساحة: </Text>
@@ -278,24 +309,45 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                             </Paragraph>
                         </div>
 
-                        <Paragraph style={{ marginTop: 'auto' }}>
-                                <Button type="link" onClick={() => openDetailsModal(property)}>
-                                    عرض التفاصيل
+                        <div
+                            style={{
+                                marginTop: 'auto',
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                                gap: 8,
+                            }}
+                        >
+                            <Button
+                                type="primary"
+                                onClick={() => openDetailsModal(property)}
+                                style={{ ...actionBtnBaseStyle, background: '#2f6d33' }}
+                            >
+                                عرض التفاصيل
+                            </Button>
+                            <Button
+                                onClick={() => handleShare(property)}
+                                style={actionBtnBaseStyle}
+                            >
+                                مشاركة
+                            </Button>
+                            {canEdit && (
+                                <Button
+                                    onClick={() => openEditModal(property)}
+                                    style={actionBtnBaseStyle}
+                                >
+                                    تعديل العرض
                                 </Button>
-                                {canEdit && (
-                                    <Button type="link" onClick={() => openEditModal(property)}>
-                                        تعديل العرض
-                                    </Button>
-                                )}
-                                {canDelete && (
-                                    <Button type="link" danger onClick={() => handleDelete(property)}>
-                                        حذف العرض
-                                    </Button>
-                                )}
-                                <Button type="link" onClick={() => handleShare(property)}>
-                                    مشاركة
+                            )}
+                            {canDelete && (
+                                <Button
+                                    danger
+                                    onClick={() => handleDelete(property)}
+                                    style={actionBtnBaseStyle}
+                                >
+                                    حذف العرض
                                 </Button>
-                            </Paragraph>
+                            )}
+                        </div>
                         </Card>
                     </List.Item>
                 )}

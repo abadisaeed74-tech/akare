@@ -180,6 +180,7 @@ const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey, da
                         style={{
                             color: darkMode && !showDelete ? '#e2e8f0' : undefined,
                             borderColor: darkMode && showDelete ? 'rgba(148,163,184,0.35)' : undefined,
+                            background: showDelete ? '#3f7d3c' : undefined,
                         }}
                     />
                 </Tooltip>
@@ -217,9 +218,10 @@ const NavigationTree: React.FC<NavigationTreeProps> = ({ onSelect, reloadKey, da
                     );
                 }}
                 style={{
-                    background: darkMode ? 'rgba(15,23,42,0.35)' : '#fff',
+                    background: darkMode ? 'rgba(24,38,30,0.45)' : '#f8faf6',
                     borderRadius: 12,
                     padding: 6,
+                    border: darkMode ? '1px solid rgba(95, 128, 108, 0.35)' : '1px solid #e4e7df',
                 }}
             />
         </div>

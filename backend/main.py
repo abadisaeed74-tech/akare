@@ -30,6 +30,14 @@ from models import (
     SubdomainCheckResponse,
     EmployeeCreate,
     EmployeeUpdate,
+    PlatformStats,
+    PlatformOfficeSummary,
+    PlatformOfficeDetail,
+    PlatformAdminSubscriptionActionRequest,
+    PropertyInquiryCreate,
+    PropertyInquiryPublic,
+    PropertyInquiryStatusUpdate,
+    DashboardOverview,
 )
 from ai_processor import process_real_estate_text
 from database import (
@@ -63,6 +71,15 @@ from database import (
     update_company_billing_from_stripe,
     consume_company_daily_ai_quota,
     start_company_free_trial_db,
+    get_platform_stats_db,
+    get_platform_offices_overview_db,
+    get_platform_office_detail_db,
+    increment_property_view_count,
+    create_property_inquiry_db,
+    get_owner_inquiries_db,
+    count_owner_inquiries_db,
+    count_owner_total_views_db,
+    update_property_inquiry_status_db,
 )
 
 
@@ -131,6 +148,11 @@ try:
 except ValueError:
     AI_DAILY_ANALYSIS_LIMIT = 30
 FREE_TRIAL_PLAN_KEY = "starter"
+PLATFORM_ADMIN_EMAILS = {
+    email.strip().lower()
+    for email in os.getenv("PLATFORM_ADMIN_EMAILS", "abadi.saeed@bynh.sa").split(",")
+    if email.strip()
+}
 
 
 def verify_password(plain_password, hashed_password):
@@ -270,7 +292,8 @@ async def refresh_trial_subscription_state(owner_user_id: str) -> Dict:
     company = await get_or_create_company_for_owner(owner_user_id)
     if not company.get("is_subscribed", False):
         return company
-    if company.get("billing_status") != "trialing":
+    auto_expiring_statuses = {"trialing", "manual_free", "manual_extended"}
+    if company.get("billing_status") not in auto_expiring_statuses:
         return company
 
     ends_at = company.get("subscription_ends_at")
@@ -306,6 +329,12 @@ async def can_view_company_properties(owner_user_id: Optional[str]) -> bool:
     return bool(company.get("is_subscribed", False))
 
 
+def require_platform_admin(current_user: UserPublic) -> None:
+    email = (current_user.email or "").strip().lower()
+    if email not in PLATFORM_ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="هذه الصفحة متاحة لمالك المنصة فقط.")
+
+
 def ensure_stripe_ready(plan_key: Optional[str] = None) -> None:
     if not STRIPE_SECRET_KEY:
         raise HTTPException(
@@ -319,6 +348,103 @@ def ensure_stripe_ready(plan_key: Optional[str] = None) -> None:
                 status_code=500,
                 detail=f"Stripe price id غير مهيأ للخطة: {plan_key}",
             )
+
+
+@app.get("/admin/platform-stats", response_model=PlatformStats)
+async def get_platform_stats(current_user: UserPublic = Depends(get_current_user)):
+    """
+    Platform-wide stats for product owner/admin dashboard.
+    """
+    require_platform_admin(current_user)
+    stats = await get_platform_stats_db()
+    return PlatformStats(**stats)
+
+
+@app.get("/admin/platform-offices", response_model=List[PlatformOfficeSummary])
+async def get_platform_offices(current_user: UserPublic = Depends(get_current_user)):
+    """
+    Platform-wide offices list with per-office aggregates.
+    """
+    require_platform_admin(current_user)
+    offices = await get_platform_offices_overview_db()
+    return [PlatformOfficeSummary(**o) for o in offices]
+
+
+@app.get("/admin/platform-offices/{owner_user_id}", response_model=PlatformOfficeDetail)
+async def get_platform_office_detail(
+    owner_user_id: str,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Full office details for platform admin.
+    """
+    require_platform_admin(current_user)
+    detail = await get_platform_office_detail_db(owner_user_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Office not found")
+    return PlatformOfficeDetail(**detail)
+
+
+@app.post("/admin/platform-offices/{owner_user_id}/subscription-action", response_model=CompanySettings)
+async def platform_admin_subscription_action(
+    owner_user_id: str,
+    data: PlatformAdminSubscriptionActionRequest,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Platform admin can extend subscription or grant manual free period by days.
+    """
+    require_platform_admin(current_user)
+
+    company = await get_or_create_company_for_owner(owner_user_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Office not found")
+
+    now = datetime.utcnow()
+
+    if data.action == "cancel":
+        updated = await update_company_billing_from_stripe(
+            owner_user_id,
+            billing_status="cancelled_by_platform_admin",
+            is_subscribed=False,
+            cancel_at_period_end=False,
+            subscription_ends_at=now,
+        )
+        if not updated:
+            raise HTTPException(status_code=400, detail="تعذر إلغاء الاشتراك.")
+        return company_settings_response(updated)
+
+    if data.days is None:
+        raise HTTPException(status_code=400, detail="عدد الأيام مطلوب لهذه العملية.")
+
+    current_end = company.get("subscription_ends_at")
+    if isinstance(current_end, str):
+        try:
+            current_end = datetime.fromisoformat(current_end.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            current_end = None
+
+    base_end = current_end if isinstance(current_end, datetime) and current_end > now else now
+    new_end = base_end + timedelta(days=int(data.days))
+    started_at = company.get("subscription_started_at") or now
+
+    if data.action == "grant_free":
+        next_status = "manual_free"
+    else:
+        current_status = (company.get("billing_status") or "").strip()
+        next_status = current_status if current_status else "manual_extended"
+
+    updated = await update_company_billing_from_stripe(
+        owner_user_id,
+        billing_status=next_status,
+        is_subscribed=True,
+        cancel_at_period_end=False,
+        subscription_started_at=started_at,
+        subscription_ends_at=new_end,
+    )
+    if not updated:
+        raise HTTPException(status_code=400, detail="تعذر تحديث حالة الاشتراك.")
+    return company_settings_response(updated)
 
 
 def stripe_obj_to_dict(value):
@@ -999,10 +1125,82 @@ async def get_public_property(property_id: str):
     Public read-only endpoint to view a single property by ID.
     No authentication required, used for share links.
     """
-    prop = await get_property_by_id(property_id)
+    prop = await increment_property_view_count(property_id)
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
     return prop
+
+
+@app.post("/public/properties/{property_id}/inquiries", response_model=PropertyInquiryPublic)
+async def create_public_property_inquiry(property_id: str, payload: PropertyInquiryCreate):
+    """
+    Public endpoint: buyer can send inquiry for a property.
+    """
+    prop = await get_property_by_id(property_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    owner_id = prop.get("owner_id")
+    if not owner_id:
+        raise HTTPException(status_code=400, detail="لا يمكن إرسال استفسار لهذا العرض.")
+
+    message_text = (payload.message or "").strip()
+    if not message_text:
+        raise HTTPException(status_code=400, detail="الرجاء كتابة نص الاستفسار.")
+
+    inquiry = await create_property_inquiry_db(
+        property_id=property_id,
+        owner_id=owner_id,
+        property_title=f"{prop.get('property_type', 'عقار')} في {prop.get('neighborhood', 'غير مذكور')}",
+        city=prop.get("city"),
+        neighborhood=prop.get("neighborhood"),
+        name=(payload.name or "").strip() or None,
+        phone=(payload.phone or "").strip() or None,
+        message=message_text,
+    )
+    return PropertyInquiryPublic(**inquiry)
+
+
+@app.get("/dashboard/overview", response_model=DashboardOverview)
+async def get_dashboard_overview(current_user: UserPublic = Depends(get_current_user)):
+    """
+    Owner/employee dashboard overview with real totals.
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return DashboardOverview(total_properties=0, total_views=0, total_inquiries=0, recent_inquiries=[])
+
+    if not await can_view_company_properties(owner_id):
+        return DashboardOverview(total_properties=0, total_views=0, total_inquiries=0, recent_inquiries=[])
+
+    total_properties = await count_properties_for_owner(owner_id)
+    total_views = await count_owner_total_views_db(owner_id)
+    total_inquiries = await count_owner_inquiries_db(owner_id)
+    recent_raw = await get_owner_inquiries_db(owner_id, limit=20)
+    recent = [PropertyInquiryPublic(**r) for r in recent_raw]
+
+    return DashboardOverview(
+        total_properties=total_properties,
+        total_views=total_views,
+        total_inquiries=total_inquiries,
+        recent_inquiries=recent,
+    )
+
+
+@app.put("/dashboard/inquiries/{inquiry_id}/status", response_model=PropertyInquiryPublic)
+async def update_dashboard_inquiry_status(
+    inquiry_id: str,
+    payload: PropertyInquiryStatusUpdate,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Owner can mark inquiry as responded/new.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه تحديث حالة الاستفسارات.")
+    updated = await update_property_inquiry_status_db(current_user.id, inquiry_id, payload.status)
+    if not updated:
+        raise HTTPException(status_code=404, detail="الاستفسار غير موجود.")
+    return PropertyInquiryPublic(**updated)
 
 
 @app.get("/public/companies/{owner_id}", response_model=CompanySettings)

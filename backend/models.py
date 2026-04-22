@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 
 
@@ -35,6 +35,7 @@ class Property(BaseModel):
     videos: List[str] = Field(default_factory=list)
     documents: List[str] = Field(default_factory=list)
     map_url: Optional[str] = None
+    view_count: int = 0
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -185,4 +186,86 @@ class EmployeeCreate(BaseModel):
 class EmployeeUpdate(BaseModel):
     status: Optional[str] = None  # "active" | "disabled"
     permissions: Optional[dict] = None
+
+
+class PlatformStats(BaseModel):
+    total_users: int
+    total_owners: int
+    total_employees: int
+    total_offices: int
+    total_properties: int
+    subscribed_offices: int
+    trialing_offices: int
+    unsubscribed_offices: int
+
+
+class PlatformPropertyMini(BaseModel):
+    id: Optional[str] = None
+    city: str
+    neighborhood: str
+    property_type: str
+    area: float
+    price: float
+    owner_name: Optional[str] = None
+
+
+class PlatformOfficeSummary(BaseModel):
+    owner_user_id: str
+    owner_email: Optional[str] = None
+    company_name: Optional[str] = None
+    plan_key: str = "starter"
+    is_subscribed: bool = False
+    billing_status: Optional[str] = None
+    trial_used: bool = False
+    subscription_started_at: Optional[datetime] = None
+    subscription_ends_at: Optional[datetime] = None
+    total_properties: int = 0
+    total_employees: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class PlatformOfficeDetail(PlatformOfficeSummary):
+    contact_phone: Optional[str] = None
+    official_email: Optional[str] = None
+    subdomain: Optional[str] = None
+    employees: List[TeamUserPublic] = Field(default_factory=list)
+    properties: List[PlatformPropertyMini] = Field(default_factory=list)
+
+
+class PlatformAdminSubscriptionActionRequest(BaseModel):
+    action: Literal["extend", "grant_free", "cancel"]
+    days: Optional[int] = Field(default=None, ge=1, le=3650)
+
+
+class PropertyInquiryCreate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    message: str
+
+
+class PropertyInquiryPublic(BaseModel):
+    id: str
+    property_id: str
+    owner_id: str
+    property_title: Optional[str] = None
+    city: Optional[str] = None
+    neighborhood: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    message: str
+    status: str = "new"  # "new" | "responded"
+    responded_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class PropertyInquiryStatusUpdate(BaseModel):
+    status: Literal["new", "responded"]
+
+
+class DashboardOverview(BaseModel):
+    total_properties: int
+    total_views: int
+    total_inquiries: int
+    recent_inquiries: List[PropertyInquiryPublic] = Field(default_factory=list)
 

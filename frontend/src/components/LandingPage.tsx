@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Button, Card, Tag, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -13,8 +13,6 @@ import {
   EyeOutlined,
   DollarOutlined,
   PhoneOutlined,
-  MoonOutlined,
-  SunOutlined,
 } from '@ant-design/icons';
 
 const { Title, Text, Paragraph } = Typography;
@@ -75,57 +73,26 @@ const navItems = [
 
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<'light' | 'dark'>(() => {
-    if (typeof window === 'undefined') return 'light';
-    const savedMode = window.localStorage.getItem('akare_theme_mode');
-    return savedMode === 'dark' ? 'dark' : 'light';
-  });
-  const isDark = mode === 'dark';
-
-  useEffect(() => {
-    window.localStorage.setItem('akare_theme_mode', mode);
-  }, [mode]);
-
-  const palette = isDark
-    ? {
-        pageBg:
-          'radial-gradient(circle at 12% 14%, rgba(99,102,241,0.28), transparent 36%), radial-gradient(circle at 88% 12%, rgba(6,182,212,0.22), transparent 30%), radial-gradient(circle at 50% 86%, rgba(59,130,246,0.2), transparent 34%), linear-gradient(145deg, #0f172a 0%, #172554 45%, #0f172a 100%)',
-        navBg: 'rgba(15, 23, 42, 0.58)',
-        navBorder: '1px solid rgba(148,163,184,0.35)',
-        navBrand: '#f8fafc',
-        navText: '#e2e8f0',
-        chipBg: 'rgba(255,255,255,0.14)',
-        chipBorder: '1px solid rgba(148, 163, 184, 0.32)',
-        heroBg: 'linear-gradient(140deg, #0f172a 0%, #172554 50%, #1d4ed8 100%)',
-        heroBorder: '1px solid rgba(148,163,184,0.25)',
-        heroTitle: '#f8fafc',
-        heroBody: '#cbd5e1',
-        surface: '#0f172a',
-        surfaceSoft: 'rgba(15,23,42,0.72)',
-        surfaceBorder: '1px solid rgba(148,163,184,0.3)',
-        text: '#f8fafc',
-        textMuted: '#cbd5e1',
-      }
-    : {
-        pageBg:
-          'radial-gradient(circle at 10% 12%, rgba(30,58,138,0.15), transparent 36%), radial-gradient(circle at 92% 10%, rgba(56,189,248,0.14), transparent 30%), radial-gradient(circle at 48% 82%, rgba(14,165,233,0.09), transparent 34%), linear-gradient(145deg, #f7faff 0%, #ffffff 50%, #f2f9ff 100%)',
-        navBg: '#ffffffcc',
-        navBorder: '1px solid #edf2ff',
-        navBrand: '#0f172a',
-        navText: '#334155',
-        chipBg: 'rgba(255,255,255,0.55)',
-        chipBorder: '1px solid rgba(148, 163, 184, 0.32)',
-        heroBg: 'linear-gradient(140deg, #f8fbff 0%, #f2f7ff 100%)',
-        heroBorder: '1px solid #e7eefc',
-        heroTitle: '#0f172a',
-        heroBody: '#334155',
-        surface: '#ffffff',
-        surfaceSoft: '#ffffffcc',
-        surfaceBorder: '1px solid #edf2ff',
-        text: '#0f172a',
-        textMuted: '#475569',
-      };
-  const iconAccent = isDark ? '#93c5fd' : '#1E3A8A';
+  const palette = {
+    pageBg:
+      'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)',
+    navBg: '#ffffffcc',
+    navBorder: '1px solid #edf2ff',
+    navBrand: '#0f172a',
+    navText: '#334155',
+    chipBg: 'rgba(255,255,255,0.55)',
+    chipBorder: '1px solid rgba(148, 163, 184, 0.32)',
+    heroBg: 'linear-gradient(140deg, #fbfdf9 0%, #f2f7ef 100%)',
+    heroBorder: '1px solid #e7eefc',
+    heroTitle: '#0f172a',
+    heroBody: '#334155',
+    surface: '#ffffff',
+    surfaceSoft: '#ffffffcc',
+    surfaceBorder: '1px solid #edf2ff',
+    text: '#0f172a',
+    textMuted: '#475569',
+  };
+  const iconAccent = '#3f7d3c';
 
   return (
     <div
@@ -181,9 +148,7 @@ const LandingPage: React.FC = () => {
                       alignItems: 'center',
                       justifyContent: 'center',
                       borderRadius: '50%',
-                      background: isDark
-                        ? 'linear-gradient(145deg, rgba(59,130,246,0.28), rgba(14,165,233,0.24))'
-                        : 'linear-gradient(145deg, rgba(30,58,138,0.15), rgba(56,189,248,0.14))',
+                      background: 'linear-gradient(145deg, rgba(30,58,138,0.15), rgba(56,189,248,0.14))',
                       color: iconAccent,
                       fontSize: 12,
                     }}
@@ -195,18 +160,6 @@ const LandingPage: React.FC = () => {
               ))}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Button
-                icon={isDark ? <SunOutlined /> : <MoonOutlined />}
-                onClick={() => setMode(isDark ? 'light' : 'dark')}
-                style={{
-                  color: palette.text,
-                  border: palette.chipBorder,
-                  background: isDark ? 'rgba(30, 41, 59, 0.82)' : '#ffffff',
-                  fontWeight: 600,
-                }}
-              >
-                {isDark ? 'الوضع النهاري' : 'الوضع الليلي'}
-              </Button>
               <Button onClick={() => navigate('/auth?mode=login')}>تسجيل دخول</Button>
               <Button type="primary" onClick={() => navigate('/auth?mode=register')}>
                 إنشاء حساب
@@ -254,7 +207,7 @@ const LandingPage: React.FC = () => {
                 size="large"
                 icon={<RocketOutlined />}
                 onClick={() => navigate('/auth?mode=register')}
-                style={{ minWidth: 235, fontWeight: 700, height: 48 }}
+                style={{ minWidth: 235, fontWeight: 700, height: 48, background: '#3f7d3c' }}
               >
                 ابدأ تجربتك الآن / إنشاء حساب
               </Button>
@@ -422,16 +375,16 @@ const LandingPage: React.FC = () => {
                 bordered={false}
                 style={{
                   borderRadius: 16,
-                  border: plan.highlight ? '1px solid #2563eb' : '1px solid #e2e8f0',
+                  border: plan.highlight ? '1px solid #3f7d3c' : '1px solid #e2e8f0',
                   boxShadow: plan.highlight
-                    ? '0 18px 38px rgba(37,99,235,0.2)'
+                    ? '0 18px 38px rgba(63,125,60,0.2)'
                     : '0 10px 24px rgba(15,23,42,0.06)',
                   transform: plan.highlight ? 'translateY(-4px)' : 'none',
                   background: palette.surface,
                 }}
               >
                 {plan.highlight && (
-                  <Tag color="blue" icon={<CrownOutlined />} style={{ borderRadius: 999, marginBottom: 8 }}>
+                  <Tag color="green" icon={<CrownOutlined />} style={{ borderRadius: 999, marginBottom: 8 }}>
                     الأكثر اختيارًا
                   </Tag>
                 )}
@@ -449,7 +402,7 @@ const LandingPage: React.FC = () => {
                 <Button
                   type={plan.highlight ? 'primary' : 'default'}
                   block
-                  style={{ marginTop: 14 }}
+                  style={{ marginTop: 14, ...(plan.highlight ? { background: '#3f7d3c' } : {}) }}
                   onClick={() => navigate('/billing/checkout')}
                 >
                   اشترك الآن

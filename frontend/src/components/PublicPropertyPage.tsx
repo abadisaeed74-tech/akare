@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Typography, Spin, Alert, Image, Button, Modal, Avatar, Tag } from 'antd';
-import { EnvironmentOutlined, ShareAltOutlined, HeartOutlined, SaveOutlined } from '@ant-design/icons';
+import { Card, Typography, Spin, Alert, Image, Button, Modal, Avatar, Tag, Form, Input, message } from 'antd';
+import { EnvironmentOutlined, ShareAltOutlined, HeartOutlined, SaveOutlined, EyeOutlined, MessageOutlined } from '@ant-design/icons';
 import type { Property, PublicCompany } from '../services/api';
-import { getPublicProperty, getPublicCompany, resolveMediaUrl } from '../services/api';
+import { getPublicProperty, getPublicCompany, resolveMediaUrl, createPublicPropertyInquiry } from '../services/api';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -15,6 +15,9 @@ const PublicPropertyPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [activeVideoIndex, setActiveVideoIndex] = useState<number | null>(null);
     const [company, setCompany] = useState<PublicCompany | null>(null);
+    const [inquiryOpen, setInquiryOpen] = useState(false);
+    const [sendingInquiry, setSendingInquiry] = useState(false);
+    const [inquiryForm] = Form.useForm<{ name?: string; phone?: string; message: string }>();
 
     useEffect(() => {
         const fetchData = async () => {
@@ -64,7 +67,7 @@ const PublicPropertyPage: React.FC = () => {
         <div
             style={{
                 minHeight: '100vh',
-                background: '#f5f5f5',
+                background: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)',
                 padding: '24px 8px',
                 direction: 'rtl',
                 display: 'flex',
@@ -72,7 +75,7 @@ const PublicPropertyPage: React.FC = () => {
             }}
         >
             <Card
-                style={{ width: '100%', maxWidth: 900, boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}
+                style={{ width: '100%', maxWidth: 960, boxShadow: '0 12px 28px rgba(41,66,49,0.08)', borderRadius: 18, border: '1px solid #e4e7df' }}
                 bodyStyle={{ padding: 24 }}
             >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -99,6 +102,7 @@ const PublicPropertyPage: React.FC = () => {
                             <Button
                                 type="primary"
                                 size="small"
+                                style={{ background: '#3f7d3c' }}
                                 onClick={() => navigate(`/share/company/${property.owner_id}`)}
                             >
                                 عرض جميع العروض لهذا المكتب
@@ -132,7 +136,7 @@ const PublicPropertyPage: React.FC = () => {
                                 gap: 8,
                             }}
                         >
-                            <Tag color="black">عرض عقاري</Tag>
+                            <Tag color="green">عرض عقاري</Tag>
                             <Text type="secondary">
                                 <EnvironmentOutlined style={{ marginLeft: 4 }} />
                                 {property.neighborhood || 'حي غير مذكور'}
@@ -161,6 +165,11 @@ const PublicPropertyPage: React.FC = () => {
                             <Button icon={<ShareAltOutlined />} />
                             <Button icon={<HeartOutlined />} />
                             <Button icon={<SaveOutlined />} />
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                            <Tag icon={<EyeOutlined />} color="green">
+                                {(property.view_count || 0).toLocaleString('ar-SA')} مشاهدة
+                            </Tag>
                         </div>
                     </div>
                 </div>
@@ -382,14 +391,55 @@ const PublicPropertyPage: React.FC = () => {
                 </Paragraph>
 
                 <div style={{ marginTop: 24, textAlign: 'center' }}>
-                    <Button
-                        type="link"
-                        href={property.map_url || undefined}
-                        target={property.map_url ? '_blank' : undefined}
-                    >
-                        تواصل مع المسوّق لمزيد من التفاصيل
+                    <Button type="primary" icon={<MessageOutlined />} onClick={() => setInquiryOpen(true)} style={{ background: '#3f7d3c' }}>
+                        إرسال استفسار عن هذا العرض
                     </Button>
                 </div>
+
+                <Modal
+                    title="إرسال استفسار"
+                    open={inquiryOpen}
+                    onCancel={() => setInquiryOpen(false)}
+                    okText="إرسال"
+                    cancelText="إلغاء"
+                    confirmLoading={sendingInquiry}
+                    onOk={async () => {
+                        try {
+                            const values = await inquiryForm.validateFields();
+                            if (!id) return;
+                            setSendingInquiry(true);
+                            await createPublicPropertyInquiry(id, {
+                                name: values.name,
+                                phone: values.phone,
+                                message: values.message,
+                            });
+                            message.success('تم إرسال استفسارك بنجاح.');
+                            inquiryForm.resetFields();
+                            setInquiryOpen(false);
+                        } catch (e: any) {
+                            if (e?.errorFields) return;
+                            message.error(e?.response?.data?.detail || 'تعذر إرسال الاستفسار.');
+                        } finally {
+                            setSendingInquiry(false);
+                        }
+                    }}
+                >
+                    <Form form={inquiryForm} layout="vertical">
+                        <Form.Item label="الاسم (اختياري)" name="name">
+                            <Input />
+                        </Form.Item>
+                        <Form.Item label="رقم التواصل (اختياري)" name="phone">
+                            <Input />
+                        </Form.Item>
+                        <Form.Item
+                            label="نص الاستفسار"
+                            name="message"
+                            rules={[{ required: true, message: 'الرجاء كتابة الاستفسار.' }]}
+                        >
+                            <Input.TextArea rows={4} />
+                        </Form.Item>
+                    </Form>
+                </Modal>
             </Card>
         </div>
     );

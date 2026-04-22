@@ -60,6 +60,7 @@ export interface Property {
   videos?: string[];
   documents?: string[];
   map_url?: string | null;
+  view_count?: number;
 }
 
 export interface UserPublic {
@@ -135,6 +136,73 @@ export interface PublicCompany {
   official_email?: string;
   contact_phone?: string;
   subdomain?: string;
+}
+
+export interface PropertyInquiry {
+  id: string;
+  property_id: string;
+  owner_id: string;
+  property_title?: string | null;
+  city?: string | null;
+  neighborhood?: string | null;
+  name?: string | null;
+  phone?: string | null;
+  message: string;
+  status: 'new' | 'responded';
+  responded_at?: string | null;
+  created_at: string;
+}
+
+export interface DashboardOverview {
+  total_properties: number;
+  total_views: number;
+  total_inquiries: number;
+  recent_inquiries: PropertyInquiry[];
+}
+
+export interface PlatformStats {
+  total_users: number;
+  total_owners: number;
+  total_employees: number;
+  total_offices: number;
+  total_properties: number;
+  subscribed_offices: number;
+  trialing_offices: number;
+  unsubscribed_offices: number;
+}
+
+export interface PlatformPropertyMini {
+  id?: string | null;
+  city: string;
+  neighborhood: string;
+  property_type: string;
+  area: number;
+  price: number;
+  owner_name?: string | null;
+}
+
+export interface PlatformOfficeSummary {
+  owner_user_id: string;
+  owner_email?: string | null;
+  company_name?: string | null;
+  plan_key: string;
+  is_subscribed: boolean;
+  billing_status?: string | null;
+  trial_used: boolean;
+  subscription_started_at?: string | null;
+  subscription_ends_at?: string | null;
+  total_properties: number;
+  total_employees: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface PlatformOfficeDetail extends PlatformOfficeSummary {
+  contact_phone?: string | null;
+  official_email?: string | null;
+  subdomain?: string | null;
+  employees: TeamUser[];
+  properties: PlatformPropertyMini[];
 }
 
 export const uploadFile = async (file: File): Promise<string> => {
@@ -213,6 +281,34 @@ export const loginUser = async (email: string, password: string): Promise<{ acce
 
 export const getCurrentUser = async (): Promise<UserPublic> => {
   const response = await apiClient.get('/me');
+  return response.data;
+};
+
+export const getPlatformStats = async (): Promise<PlatformStats> => {
+  const response = await apiClient.get('/admin/platform-stats');
+  return response.data;
+};
+
+export const getPlatformOffices = async (): Promise<PlatformOfficeSummary[]> => {
+  const response = await apiClient.get('/admin/platform-offices');
+  return response.data;
+};
+
+export const getPlatformOfficeDetail = async (
+  ownerUserId: string,
+): Promise<PlatformOfficeDetail> => {
+  const response = await apiClient.get(`/admin/platform-offices/${ownerUserId}`);
+  return response.data;
+};
+
+export const platformAdminSubscriptionAction = async (
+  ownerUserId: string,
+  payload: { action: 'extend' | 'grant_free' | 'cancel'; days?: number },
+): Promise<CompanySettings> => {
+  const response = await apiClient.post(
+    `/admin/platform-offices/${ownerUserId}/subscription-action`,
+    payload,
+  );
   return response.data;
 };
 
@@ -357,6 +453,27 @@ export const aiSearchProperties = async (query: string): Promise<Property[]> => 
 
 export const getPublicProperty = async (id: string): Promise<Property> => {
   const response = await apiClient.get(`/public/properties/${id}`);
+  return response.data;
+};
+
+export const createPublicPropertyInquiry = async (
+  propertyId: string,
+  payload: { name?: string; phone?: string; message: string },
+): Promise<PropertyInquiry> => {
+  const response = await apiClient.post(`/public/properties/${propertyId}/inquiries`, payload);
+  return response.data;
+};
+
+export const getDashboardOverview = async (): Promise<DashboardOverview> => {
+  const response = await apiClient.get('/dashboard/overview');
+  return response.data;
+};
+
+export const updateInquiryStatus = async (
+  inquiryId: string,
+  status: 'new' | 'responded',
+): Promise<PropertyInquiry> => {
+  const response = await apiClient.put(`/dashboard/inquiries/${inquiryId}/status`, { status });
   return response.data;
 };
 

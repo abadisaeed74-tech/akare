@@ -1,13 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Layout, Typography, message, Button, ConfigProvider } from 'antd';
+import { Layout, Typography, message, Button, ConfigProvider, Card, Row, Col, Tag } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
     SettingOutlined,
     LogoutOutlined,
     MenuFoldOutlined,
     MenuUnfoldOutlined,
-    MoonOutlined,
-    SunOutlined,
+    PlusOutlined,
+    BarChartOutlined,
+    HomeOutlined,
+    ApartmentOutlined,
+    EyeOutlined,
+    UsergroupAddOutlined,
+    AppstoreOutlined,
+    EnvironmentOutlined,
+    MessageOutlined,
+    CheckCircleOutlined,
+    ClockCircleOutlined,
 } from '@ant-design/icons';
 import {
     Property,
@@ -17,6 +26,10 @@ import {
     getCurrentUser,
     getPublicCompany,
     setAuthToken,
+    resolveMediaUrl,
+    getDashboardOverview,
+    type DashboardOverview,
+    updateInquiryStatus,
 } from './services/api';
 import PropertyForm from './components/PropertyForm';
 import NavigationTree from './components/NavigationTree';
@@ -26,6 +39,7 @@ import Search from 'antd/es/input/Search';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
+const PLATFORM_OWNER_EMAIL = 'abadi.saeed@bynh.sa';
 
 const App: React.FC = () => {
     const [properties, setProperties] = useState<Property[]>([]);
@@ -35,22 +49,17 @@ const App: React.FC = () => {
     const [companyName, setCompanyName] = useState<string>('');
     const [siderCollapsed, setSiderCollapsed] = useState<boolean>(false);
     const [treeReloadKey, setTreeReloadKey] = useState<number>(0);
-    const [mode, setMode] = useState<'light' | 'dark'>(() => {
-        if (typeof window === 'undefined') return 'light';
-        const savedMode = window.localStorage.getItem('akare_theme_mode');
-        return savedMode === 'dark' ? 'dark' : 'light';
-    });
+    const [showPropertyForm, setShowPropertyForm] = useState<boolean>(false);
+    const [activeSection, setActiveSection] = useState<'overview' | 'properties' | 'inquiries'>('overview');
+    const [overview, setOverview] = useState<DashboardOverview | null>(null);
+    const [isMobile, setIsMobile] = useState<boolean>(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
     const navigate = useNavigate();
 
     useEffect(() => {
-        window.localStorage.setItem('akare_theme_mode', mode);
-        document.body.classList.toggle('akare-dark', mode === 'dark');
-        document.body.classList.toggle('akare-light', mode === 'light');
-        return () => {
-            document.body.classList.remove('akare-dark');
-            document.body.classList.remove('akare-light');
-        };
-    }, [mode]);
+        const onResize = () => setIsMobile(window.innerWidth < 768);
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
+    }, []);
 
     const fetchAndSetProperties = useCallback(async () => {
         setLoading(true);
@@ -63,6 +72,15 @@ const App: React.FC = () => {
             setLoading(false);
         }
     }, [filters]);
+
+    const fetchOverview = useCallback(async () => {
+        try {
+            const data = await getDashboardOverview();
+            setOverview(data);
+        } catch {
+            setOverview(null);
+        }
+    }, []);
 
     useEffect(() => {
         const initAuth = async () => {
@@ -93,6 +111,10 @@ const App: React.FC = () => {
     useEffect(() => {
         fetchAndSetProperties();
     }, [fetchAndSetProperties]);
+
+    useEffect(() => {
+        fetchOverview();
+    }, [fetchOverview]);
     
     const handleSearch = async (query: string) => {
         if (!query) {
@@ -112,6 +134,7 @@ const App: React.FC = () => {
 
     const handlePropertyCreated = async () => {
         await fetchAndSetProperties();
+        await fetchOverview();
         setTreeReloadKey((prev) => prev + 1);
     };
 
@@ -131,30 +154,21 @@ const App: React.FC = () => {
         navigate('/auth', { replace: true });
     };
 
-    const isDark = mode === 'dark';
-    const palette = isDark
-        ? {
-              pageBg:
-                  'radial-gradient(circle at 12% 14%, rgba(99,102,241,0.2), transparent 36%), radial-gradient(circle at 88% 12%, rgba(6,182,212,0.14), transparent 30%), linear-gradient(145deg, #1e293b 0%, #334155 48%, #1e293b 100%)',
-              glassBg: 'rgba(30, 41, 59, 0.58)',
-              glassBorder: '1px solid rgba(148,163,184,0.35)',
-              text: '#f8fafc',
-              textMuted: '#cbd5e1',
-              cardBg: '#1e293b',
-          }
-        : {
-              pageBg:
-                  'radial-gradient(circle at 10% 12%, rgba(30,58,138,0.14), transparent 36%), radial-gradient(circle at 92% 10%, rgba(56,189,248,0.13), transparent 30%), linear-gradient(145deg, #f7faff 0%, #ffffff 50%, #f2f9ff 100%)',
-              glassBg: '#ffffffcc',
-              glassBorder: '1px solid #e2e8f0',
-              text: '#0f172a',
-              textMuted: '#475569',
-              cardBg: '#ffffff',
-          };
+    const isPlatformOwner = (currentUser?.email || '').toLowerCase() === PLATFORM_OWNER_EMAIL;
+    const palette = {
+        pageBg: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)',
+        glassBg: 'rgba(255, 255, 255, 0.95)',
+        glassBorder: '1px solid #e4e7df',
+        text: '#294231',
+        textMuted: '#6d7d72',
+        cardBg: '#ffffff',
+        accent: '#3f7d3c',
+        surface: 'rgba(255, 255, 255, 0.98)',
+    };
 
     const appTheme = {
         token: {
-            colorPrimary: '#2563eb',
+            colorPrimary: palette.accent,
             colorBgLayout: 'transparent',
             colorBgContainer: palette.cardBg,
             colorText: palette.text,
@@ -170,14 +184,19 @@ const App: React.FC = () => {
         },
     };
 
+    const totalProperties = overview?.total_properties ?? properties.length;
+    const totalViewsLabel = overview ? overview.total_views.toLocaleString('ar-SA') : 'غير متوفرة';
+    const newInterestedLabel = overview ? overview.total_inquiries.toLocaleString('ar-SA') : 'غير متوفرة';
+    const latestProperties = properties.slice(0, 4);
+
     return (
         <ConfigProvider theme={appTheme}>
         <Layout
-            className={isDark ? 'dashboard-dark' : 'dashboard-light'}
-            style={{ minHeight: '100vh', direction: 'rtl', background: palette.pageBg }}
+            className="dashboard-light"
+            style={{ minHeight: '100vh', direction: 'rtl', background: palette.pageBg, padding: 14 }}
         >
             <Sider
-                width={250}
+                width={286}
                 collapsible
                 collapsed={siderCollapsed}
                 onCollapse={(collapsed) => setSiderCollapsed(collapsed)}
@@ -185,32 +204,123 @@ const App: React.FC = () => {
                 breakpoint="lg"
                 trigger={null}
                 style={{
-                    background: palette.glassBg,
+                    background: palette.surface,
                     borderLeft: palette.glassBorder,
-                    backdropFilter: 'blur(10px)',
-                    WebkitBackdropFilter: 'blur(10px)',
+                    borderRadius: 20,
                 }}
             >
-                <div style={{ padding: '16px', textAlign: 'center', borderBottom: palette.glassBorder }}>
+                <div style={{ padding: '18px 16px 12px', borderBottom: palette.glassBorder }}>
                     <Title level={4} style={{ color: palette.text, margin: 0 }}>عقاري</Title>
-                    <Text style={{ color: palette.textMuted, fontSize: 12 }}>
-                        {companyName || 'لوحة تحكم المكتب العقاري'}
-                    </Text>
+                    <Text style={{ color: palette.textMuted, fontSize: 12 }}>{companyName || 'مكتبك العقاري'}</Text>
+                    <Button
+                        type="primary"
+                        block
+                        icon={<PlusOutlined />}
+                        style={{ marginTop: 12, borderRadius: 10, background: palette.accent }}
+                        onClick={() => {
+                            if (activeSection === 'properties') {
+                                setShowPropertyForm((prev) => !prev);
+                                return;
+                            }
+                            setActiveSection('properties');
+                            setShowPropertyForm(true);
+                            setFilters({});
+                        }}
+                    >
+                        {showPropertyForm && activeSection === 'properties' ? 'إخفاء إضافة عقار' : 'إضافة عقار جديد'}
+                    </Button>
+                </div>
+                <div style={{ padding: '12px 10px 6px', display: 'grid', gap: 8 }}>
+                    <Button
+                        type="text"
+                        icon={<HomeOutlined />}
+                        style={{
+                            justifyContent: 'flex-start',
+                            color: palette.text,
+                            borderRadius: 10,
+                            background: activeSection === 'overview' ? '#edf5e9' : 'transparent',
+                        }}
+                        onClick={() => setActiveSection('overview')}
+                    >
+                        نظرة عامة
+                    </Button>
+                    <Button
+                        type="text"
+                        icon={<ApartmentOutlined />}
+                        style={{
+                            justifyContent: 'flex-start',
+                            color: palette.text,
+                            borderRadius: 10,
+                            background: activeSection === 'properties' ? '#edf5e9' : 'transparent',
+                        }}
+                        onClick={() => setActiveSection('properties')}
+                    >
+                        قائمة العقارات
+                    </Button>
+                    <Button
+                        type="text"
+                        icon={<MessageOutlined />}
+                        style={{
+                            justifyContent: 'flex-start',
+                            color: palette.text,
+                            borderRadius: 10,
+                            background: activeSection === 'inquiries' ? '#edf5e9' : 'transparent',
+                        }}
+                        onClick={() => setActiveSection('inquiries')}
+                    >
+                        الاستفسارات
+                    </Button>
                 </div>
                 <div style={{ padding: 8 }}>
-                    <NavigationTree onSelect={handleSelectInTree} reloadKey={treeReloadKey} darkMode={isDark} />
+                    {activeSection === 'properties' && (
+                        <NavigationTree onSelect={handleSelectInTree} reloadKey={treeReloadKey} darkMode={false} />
+                    )}
+                </div>
+                <div style={{ marginTop: 'auto', padding: '8px 10px 14px', display: 'grid', gap: 8 }}>
+                    <Button
+                        type="text"
+                        icon={<SettingOutlined />}
+                        onClick={() => {
+                            if (currentUser?.role !== 'owner') {
+                                message.error('ليس لديك صلاحية فتح صفحة الإعدادات. تواصل مع مالك الحساب.');
+                                return;
+                            }
+                            navigate('/settings');
+                        }}
+                        style={{ justifyContent: 'flex-start', color: palette.text, borderRadius: 10 }}
+                    >
+                        الإعدادات
+                    </Button>
+                    {isPlatformOwner && (
+                        <Button
+                            type="text"
+                            icon={<BarChartOutlined />}
+                            onClick={() => navigate('/platform-admin')}
+                            style={{ justifyContent: 'flex-start', color: palette.text, borderRadius: 10 }}
+                        >
+                            لوحة الأدمن
+                        </Button>
+                    )}
+                    <Button
+                        type="text"
+                        icon={<LogoutOutlined />}
+                        onClick={handleLogout}
+                        style={{ justifyContent: 'flex-start', color: '#dc2626', borderRadius: 10 }}
+                    >
+                        تسجيل الخروج
+                    </Button>
                 </div>
             </Sider>
             <Layout style={{ background: 'transparent' }}>
                 <Header
                     style={{
-                        background: palette.glassBg,
-                        padding: '0 16px',
-                        height: 72,
-                        lineHeight: '72px',
-                        borderBottom: palette.glassBorder,
-                        backdropFilter: 'blur(10px)',
-                        WebkitBackdropFilter: 'blur(10px)',
+                        background: palette.surface,
+                        padding: '0 18px',
+                        height: 82,
+                        lineHeight: '82px',
+                        border: palette.glassBorder,
+                        borderRadius: 18,
+                        marginBottom: 14,
                     }}
                 >
                     <div
@@ -218,11 +328,11 @@ const App: React.FC = () => {
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
-                            flexWrap: 'wrap',
-                            rowGap: 8,
+                            flexWrap: isMobile ? 'wrap' : 'nowrap',
+                            rowGap: isMobile ? 10 : 8,
                             columnGap: 16,
-                            minHeight: 72,
-                            paddingTop: 6,
+                            minHeight: isMobile ? 120 : 82,
+                            paddingTop: isMobile ? 12 : 8,
                         }}
                     >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -237,11 +347,11 @@ const App: React.FC = () => {
                                     )
                                 }
                                 style={{
-                                    width: 40,
-                                    height: 40,
-                                    borderRadius: 12,
+                                            width: 42,
+                                            height: 42,
+                                            borderRadius: 13,
                                     border: palette.glassBorder,
-                                    background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
+                                            background: '#fff',
                                 }}
                                 aria-label="إظهار أو إخفاء القائمة الجانبية"
                             />
@@ -252,11 +362,11 @@ const App: React.FC = () => {
                                         color: palette.text,
                                         margin: 0,
                                         whiteSpace: 'nowrap',
-                                        fontSize: 20,
+                                        fontSize: isMobile ? 22 : 30,
                                         lineHeight: 1.15,
                                     }}
                                 >
-                                    نظام إدارة العروض العقارية
+                                    {activeSection === 'overview' ? 'نظرة عامة' : activeSection === 'inquiries' ? 'الاستفسارات' : 'قائمة العقارات'}
                                 </Title>
                                 <Text style={{ color: palette.textMuted, fontSize: 12 }}>
                                     إجمالي العروض: {properties.length}
@@ -268,83 +378,271 @@ const App: React.FC = () => {
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: 12,
-                                flex: 1,
-                                minWidth: 320,
-                                marginInlineStart: 12,
+                                flex: isMobile ? '1 1 100%' : '1 1 560px',
+                                minWidth: isMobile ? 0 : 260,
+                                marginInlineStart: 'auto',
                             }}
                         >
-                            <Search
-                                placeholder="ابحث عن مدينة، حي، تفاصيل..."
-                                onSearch={handleSearch}
-                                enterButton="بحث"
-                                allowClear
-                                style={{ width: '100%', direction: 'ltr' }}
-                            />
-                            {currentUser ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <Button
-                                        type="text"
-                                        icon={isDark ? <SunOutlined /> : <MoonOutlined />}
-                                        onClick={() => setMode(isDark ? 'light' : 'dark')}
-                                        aria-label="تبديل الوضع الليلي والنهاري"
-                                        style={{
-                                            width: 38,
-                                            height: 38,
-                                            borderRadius: 12,
-                                            border: palette.glassBorder,
-                                            color: palette.text,
-                                            background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
-                                        }}
-                                    />
-                                    <Button
-                                        type="text"
-                                        icon={<SettingOutlined />}
-                                        onClick={() => {
-                                            if (currentUser?.role !== 'owner') {
-                                                message.error('ليس لديك صلاحية فتح صفحة الإعدادات. تواصل مع مالك الحساب.');
-                                                return;
-                                            }
-                                            navigate('/settings');
-                                        }}
-                                        aria-label="إعدادات المنصة"
-                                        style={{
-                                            width: 38,
-                                            height: 38,
-                                            borderRadius: 12,
-                                            border: palette.glassBorder,
-                                            color: palette.text,
-                                            background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.75)',
-                                        }}
-                                    />
-                                    <Button
-                                        type="text"
-                                        icon={<LogoutOutlined />}
-                                        onClick={handleLogout}
-                                        aria-label="تسجيل الخروج"
-                                        style={{
-                                            width: 38,
-                                            height: 38,
-                                            borderRadius: 12,
-                                            border: palette.glassBorder,
-                                            color: '#ef4444',
-                                            background: isDark ? 'rgba(248,113,113,0.08)' : 'rgba(255,255,255,0.75)',
-                                        }}
+                            {activeSection === 'properties' ? (
+                                <div style={{ flex: 1, minWidth: 220, maxWidth: 620 }}>
+                                    <Search
+                                        placeholder="ابحث باسم العقار، المدينة أو الحي..."
+                                        onSearch={handleSearch}
+                                        allowClear
+                                        size="large"
+                                        style={{ width: '100%', direction: 'rtl' }}
                                     />
                                 </div>
                             ) : (
-                                <Text style={{ whiteSpace: 'nowrap', color: palette.textMuted }}>غير مسجل الدخول</Text>
+                                <Text style={{ whiteSpace: 'nowrap', color: palette.textMuted }}>
+                                    ملخص أداء المكتب العقاري
+                                </Text>
                             )}
                         </div>
                     </div>
                 </Header>
-                <Content style={{ margin: '20px 16px 16px' }}>
-                    <PropertyForm onSuccess={handlePropertyCreated} currentUser={currentUser} />
-                    <PropertyList
-                        properties={properties}
-                        loading={loading}
-                        onRefresh={fetchAndSetProperties}
-                        currentUser={currentUser}
-                    />
+                <Content style={{ margin: '0 4px 4px' }}>
+                    {activeSection === 'overview' ? (
+                        <div style={{ display: 'grid', gap: 16 }}>
+                            <Row gutter={[12, 12]}>
+                                <Col xs={24} sm={12} lg={8}>
+                                    <Card style={{ borderRadius: 16 }}>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                                            <Tag color="green" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
+                                                مباشر
+                                            </Tag>
+                                            <div
+                                                style={{
+                                                    width: 42,
+                                                    height: 42,
+                                                    borderRadius: 12,
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    background: '#eef7ea',
+                                                    color: palette.accent,
+                                                    fontSize: 20,
+                                                }}
+                                            >
+                                                <AppstoreOutlined />
+                                            </div>
+                                        </div>
+                                        <Title level={2} style={{ margin: '12px 0 2px', color: palette.text }}>
+                                            {totalProperties.toLocaleString('ar-SA')}
+                                        </Title>
+                                        <Text strong style={{ color: palette.textMuted }}>إجمالي العقارات</Text>
+                                    </Card>
+                                </Col>
+                                <Col xs={24} sm={12} lg={8}>
+                                    <Card style={{ borderRadius: 16 }}>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                                            <Tag color="green" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
+                                                مباشر
+                                            </Tag>
+                                            <div
+                                                style={{
+                                                    width: 42,
+                                                    height: 42,
+                                                    borderRadius: 12,
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    background: '#eaf2ff',
+                                                    color: '#3b82f6',
+                                                    fontSize: 20,
+                                                }}
+                                            >
+                                                <EyeOutlined />
+                                            </div>
+                                        </div>
+                                        <Title level={2} style={{ margin: '12px 0 2px', color: palette.text }}>
+                                            {totalViewsLabel}
+                                        </Title>
+                                        <Text strong style={{ color: palette.textMuted }}>مشاهدات العروض</Text>
+                                    </Card>
+                                </Col>
+                                <Col xs={24} sm={12} lg={8}>
+                                    <Card style={{ borderRadius: 16 }}>
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                                            <Tag color="green" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
+                                                مباشر
+                                            </Tag>
+                                            <div
+                                                style={{
+                                                    width: 42,
+                                                    height: 42,
+                                                    borderRadius: 12,
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    background: '#eefaf4',
+                                                    color: '#65a30d',
+                                                    fontSize: 20,
+                                                }}
+                                            >
+                                                <UsergroupAddOutlined />
+                                            </div>
+                                        </div>
+                                        <Title level={2} style={{ margin: '12px 0 2px', color: palette.text }}>
+                                            {newInterestedLabel}
+                                        </Title>
+                                        <Text strong style={{ color: palette.textMuted }}>استفسارات جديدة</Text>
+                                    </Card>
+                                </Col>
+                            </Row>
+                            <Row gutter={[12, 12]}>
+                                <Col xs={24} lg={14}>
+                                    <Card
+                                        title={<span style={{ color: palette.text }}>أحدث العقارات المضافة</span>}
+                                        extra={
+                                            <Button
+                                                type="link"
+                                                style={{ color: '#93a26f', padding: 0 }}
+                                                onClick={() => {
+                                                    setActiveSection('properties');
+                                                    setShowPropertyForm(false);
+                                                    setFilters({});
+                                                }}
+                                            >
+                                                عرض الكل
+                                            </Button>
+                                        }
+                                    >
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+                                            {latestProperties.slice(0, 2).map((item, idx) => (
+                                                <Card
+                                                    key={item.id || idx}
+                                                    bodyStyle={{ padding: 0 }}
+                                                    style={{ borderRadius: 14, overflow: 'hidden', border: palette.glassBorder }}
+                                                >
+                                                    <div style={{ position: 'relative', height: 180, background: '#d7ddd4' }}>
+                                                        {item.images && item.images[0] ? (
+                                                            <img
+                                                                src={resolveMediaUrl(item.images[0])}
+                                                                alt={item.property_type || 'عقار'}
+                                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                            />
+                                                        ) : null}
+                                                        <Tag color="green" style={{ position: 'absolute', top: 10, left: 10, borderRadius: 999 }}>
+                                                            {item.price ? `${item.price.toLocaleString('ar-SA')} ريال` : 'سعر غير متوفر'}
+                                                        </Tag>
+                                                    </div>
+                                                    <div style={{ padding: 10 }}>
+                                                        <Text strong style={{ color: palette.text, fontSize: 18 }}>
+                                                            {item.property_type || 'عقار'} في {item.neighborhood || 'حي'}
+                                                        </Text>
+                                                        <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                            <EnvironmentOutlined style={{ color: '#9ca3af' }} />
+                                                            <Text type="secondary">{item.city || 'مدينة غير مذكورة'}</Text>
+                                                        </div>
+                                                    </div>
+                                                </Card>
+                                            ))}
+                                        </div>
+                                    </Card>
+                                </Col>
+                                <Col xs={24} lg={10}>
+                                    <Card
+                                        title={<span style={{ color: palette.text }}>آخر الاستفسارات</span>}
+                                        extra={
+                                            <Button
+                                                type="link"
+                                                style={{ color: '#93a26f', padding: 0 }}
+                                                onClick={() => setActiveSection('inquiries')}
+                                            >
+                                                عرض الكل
+                                            </Button>
+                                        }
+                                    >
+                                        {overview && overview.recent_inquiries.length > 0 ? (
+                                            <div style={{ display: 'grid', gap: 10 }}>
+                                                {overview.recent_inquiries.slice(0, 3).map((inq) => (
+                                                    <Card key={inq.id} size="small" style={{ borderRadius: 12 }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                                            <Text strong>{inq.name || 'عميل مهتم'}</Text>
+                                                            <Button
+                                                                type="text"
+                                                                icon={inq.status === 'responded' ? <CheckCircleOutlined style={{ color: '#16a34a' }} /> : <ClockCircleOutlined style={{ color: '#f59e0b' }} />}
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        const nextStatus = inq.status === 'responded' ? 'new' : 'responded';
+                                                                        await updateInquiryStatus(inq.id, nextStatus);
+                                                                        await fetchOverview();
+                                                                        message.success(nextStatus === 'responded' ? 'تم تعيين الاستفسار كمُجاب.' : 'تم إرجاع الاستفسار كغير مُجاب.');
+                                                                    } catch (e: any) {
+                                                                        message.error(e?.response?.data?.detail || 'تعذر تحديث حالة الاستفسار.');
+                                                                    }
+                                                                }}
+                                                            />
+                                                        </div>
+                                                        <div style={{ marginTop: 4 }}>
+                                                            <Text style={{ color: palette.textMuted }}>{inq.message}</Text>
+                                                        </div>
+                                                        <div style={{ marginTop: 4 }}>
+                                                            <Text type="secondary">
+                                                                {inq.city || 'غير محدد'} - {inq.neighborhood || 'غير محدد'}
+                                                            </Text>
+                                                        </div>
+                                                    </Card>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <Text style={{ color: palette.textMuted }}>غير متوفرة</Text>
+                                        )}
+                                    </Card>
+                                </Col>
+                            </Row>
+                        </div>
+                    ) : activeSection === 'inquiries' ? (
+                        <Card title="الاستفسارات">
+                            {overview && overview.recent_inquiries.length > 0 ? (
+                                <div style={{ display: 'grid', gap: 12 }}>
+                                    {overview.recent_inquiries.map((inq) => (
+                                        <Card key={inq.id} size="small" style={{ borderRadius: 12 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                                <Text strong>{inq.name || 'عميل مهتم'}</Text>
+                                                <Button
+                                                    type="text"
+                                                    icon={inq.status === 'responded' ? <CheckCircleOutlined style={{ color: '#16a34a' }} /> : <ClockCircleOutlined style={{ color: '#f59e0b' }} />}
+                                                    onClick={async () => {
+                                                        try {
+                                                            const nextStatus = inq.status === 'responded' ? 'new' : 'responded';
+                                                            await updateInquiryStatus(inq.id, nextStatus);
+                                                            await fetchOverview();
+                                                            message.success(nextStatus === 'responded' ? 'تم تعيين الاستفسار كمُجاب.' : 'تم إرجاع الاستفسار كغير مُجاب.');
+                                                        } catch (e: any) {
+                                                            message.error(e?.response?.data?.detail || 'تعذر تحديث حالة الاستفسار.');
+                                                        }
+                                                    }}
+                                                />
+                                            </div>
+                                            <div style={{ marginTop: 6 }}>
+                                                <Text>{inq.message}</Text>
+                                            </div>
+                                            <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                                <Tag>{inq.property_title || 'عرض عقاري'}</Tag>
+                                                <Tag>{inq.phone || 'لا يوجد رقم'}</Tag>
+                                            </div>
+                                        </Card>
+                                    ))}
+                                </div>
+                            ) : (
+                                <Text type="secondary">لا توجد استفسارات حتى الآن.</Text>
+                            )}
+                        </Card>
+                    ) : (
+                        <>
+                            {showPropertyForm && (
+                                <PropertyForm onSuccess={handlePropertyCreated} currentUser={currentUser} />
+                            )}
+                            <PropertyList
+                                properties={properties}
+                                loading={loading}
+                                onRefresh={fetchAndSetProperties}
+                                currentUser={currentUser}
+                            />
+                        </>
+                    )}
                 </Content>
             </Layout>
         </Layout>

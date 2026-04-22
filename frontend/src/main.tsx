@@ -8,6 +8,7 @@ import PublicPropertyPage from './components/PublicPropertyPage';
 import SettingsPage from './components/SettingsPage';
 import CompanyPublicPropertiesPage from './components/CompanyPublicPropertiesPage';
 import StripeCheckoutPage from './components/StripeCheckoutPage';
+import PlatformAdminPage from './components/PlatformAdminPage';
 import './style.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
@@ -18,6 +19,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
         <Route path="/auth" element={<AuthPage />} />
         <Route path="/app" element={<App />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/platform-admin" element={<PlatformAdminPage />} />
         <Route path="/billing/checkout" element={<StripeCheckoutPage />} />
         <Route path="/share/:id" element={<PublicPropertyPage />} />
         <Route path="/share/company/:ownerId" element={<CompanyPublicPropertiesPage />} />

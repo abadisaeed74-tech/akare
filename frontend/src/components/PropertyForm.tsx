@@ -90,10 +90,11 @@ const PropertyForm: React.FC<PropertyFormProps> = ({ onSuccess, currentUser }) =
             title="إضافة عرض عقاري جديد"
             style={{
                 marginBottom: 24,
-                borderRadius: 16,
-                boxShadow: '0 14px 30px rgba(15,23,42,0.08)',
+                borderRadius: 18,
+                boxShadow: '0 10px 24px rgba(41,66,49,0.1)',
+                border: '1px solid #e2e7dd',
             }}
-            styles={{ header: { fontWeight: 700 } }}
+            styles={{ header: { fontWeight: 700, color: '#2f4d37' } }}
         >
             {showUpgradeHint && currentUser?.role === 'owner' && (
                 <Alert
@@ -103,7 +104,7 @@ const PropertyForm: React.FC<PropertyFormProps> = ({ onSuccess, currentUser }) =
                     message="لا يمكنك إضافة عروض جديدة قبل الاشتراك في إحدى الخطط."
                     description="اختر خطة اشتراك مناسبة لمكتبك العقاري من صفحة الإعدادات، ثم أعد المحاولة."
                     action={
-                        <Button type="primary" size="small" onClick={() => navigate('/settings')}>
+                        <Button type="primary" size="small" style={{ background: '#3f7d3c' }} onClick={() => navigate('/settings')}>
                             ترقية الخطة الآن
                         </Button>
                     }
@@ -201,7 +202,7 @@ const PropertyForm: React.FC<PropertyFormProps> = ({ onSuccess, currentUser }) =
                 </Form.Item>
 
                 <Form.Item>
-                    <Button type="primary" htmlType="submit" loading={loading}>
+                    <Button type="primary" htmlType="submit" loading={loading} style={{ background: '#3f7d3c' }}>
                         تحليل وإضافة العرض
                     </Button>
                 </Form.Item>

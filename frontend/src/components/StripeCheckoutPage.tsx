@@ -106,12 +106,12 @@ const StripeCheckoutPage: React.FC = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#f5f5f5',
+        background: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)',
         direction: 'rtl',
         padding: 16,
       }}
     >
-      <Card style={{ width: 480, boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}>
+      <Card style={{ width: 500, boxShadow: '0 12px 28px rgba(41,66,49,0.08)', borderRadius: 18, border: '1px solid #e4e7df' }}>
         <Title level={3} style={{ textAlign: 'center', marginBottom: 8 }}>
           صفحة الدفع
         </Title>
@@ -170,6 +170,7 @@ const StripeCheckoutPage: React.FC = () => {
             type="primary"
             block
             loading={redirecting}
+            style={{ background: '#3f7d3c' }}
             onClick={async () => {
               try {
                 setRedirecting(true);

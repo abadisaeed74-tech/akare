@@ -19,6 +19,7 @@ database = client.akare
 property_collection = database.get_collection("properties")
 user_collection = database.get_collection("users")
 company_collection = database.get_collection("companies")
+inquiry_collection = database.get_collection("property_inquiries")
 
 # Helper to convert document from DB
 def property_helper(property) -> dict:
@@ -44,6 +45,7 @@ def property_helper(property) -> dict:
         "videos": property.get("videos", []),
         "documents": property.get("documents", []),
         "map_url": property.get("map_url"),
+        "view_count": int(property.get("view_count", 0) or 0),
     }
 
 async def add_property(property_data: Property, owner_id: str) -> dict:
@@ -54,6 +56,8 @@ async def add_property(property_data: Property, owner_id: str) -> dict:
     # can generate a proper ObjectId automatically.
     property_dict = property_data.model_dump(by_alias=True, exclude_none=True)
     property_dict["owner_id"] = owner_id
+    property_dict.setdefault("view_count", 0)
+    property_dict.setdefault("created_at", datetime.utcnow())
     result = await property_collection.insert_one(property_dict)
     new_property = await property_collection.find_one({"_id": result.inserted_id})
     return property_helper(new_property)
@@ -137,7 +141,7 @@ async def get_properties(query: dict, limit: int = 100) -> List[dict]:
     Retrieve a list of properties matching a query.
     """
     properties = []
-    async for prop in property_collection.find(query).limit(limit):
+    async for prop in property_collection.find(query).sort("_id", -1).limit(limit):
         properties.append(property_helper(prop))
     return properties
 
@@ -152,6 +156,114 @@ async def get_property_by_id(property_id: str) -> Optional[dict]:
         return None
     prop = await property_collection.find_one({"_id": oid})
     return property_helper(prop) if prop else None
+
+
+async def increment_property_view_count(property_id: str) -> Optional[dict]:
+    """
+    Increment view counter for a public property page visit.
+    """
+    try:
+        oid = ObjectId(property_id)
+    except InvalidId:
+        return None
+
+    updated = await property_collection.find_one_and_update(
+        {"_id": oid},
+        {"$inc": {"view_count": 1}},
+        return_document=ReturnDocument.AFTER,
+    )
+    return property_helper(updated) if updated else None
+
+
+def inquiry_helper(inquiry: Dict[str, Any]) -> Dict[str, Any]:
+    _id = inquiry.get("_id")
+    return {
+        "id": str(_id) if _id is not None else "",
+        "property_id": inquiry.get("property_id", ""),
+        "owner_id": inquiry.get("owner_id", ""),
+        "property_title": inquiry.get("property_title"),
+        "city": inquiry.get("city"),
+        "neighborhood": inquiry.get("neighborhood"),
+        "name": inquiry.get("name"),
+        "phone": inquiry.get("phone"),
+        "message": inquiry.get("message", ""),
+        "status": inquiry.get("status", "new"),
+        "responded_at": inquiry.get("responded_at"),
+        "created_at": inquiry.get("created_at") or datetime.utcnow(),
+    }
+
+
+async def create_property_inquiry_db(
+    *,
+    property_id: str,
+    owner_id: str,
+    property_title: Optional[str],
+    city: Optional[str],
+    neighborhood: Optional[str],
+    name: Optional[str],
+    phone: Optional[str],
+    message: str,
+) -> Dict[str, Any]:
+    doc = {
+        "property_id": property_id,
+        "owner_id": owner_id,
+        "property_title": property_title,
+        "city": city,
+        "neighborhood": neighborhood,
+        "name": name,
+        "phone": phone,
+        "message": message,
+        "status": "new",
+        "responded_at": None,
+        "created_at": datetime.utcnow(),
+    }
+    result = await inquiry_collection.insert_one(doc)
+    saved = await inquiry_collection.find_one({"_id": result.inserted_id})
+    return inquiry_helper(saved or doc)
+
+
+async def get_owner_inquiries_db(owner_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    async for inq in inquiry_collection.find({"owner_id": owner_id}).sort("_id", -1).limit(limit):
+        items.append(inquiry_helper(inq))
+    return items
+
+
+async def update_property_inquiry_status_db(
+    owner_id: str,
+    inquiry_id: str,
+    status: str,
+) -> Optional[Dict[str, Any]]:
+    try:
+        oid = ObjectId(inquiry_id)
+    except InvalidId:
+        return None
+
+    update_doc: Dict[str, Any] = {
+        "status": status,
+        "responded_at": datetime.utcnow() if status == "responded" else None,
+    }
+    updated = await inquiry_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": update_doc},
+        return_document=ReturnDocument.AFTER,
+    )
+    return inquiry_helper(updated) if updated else None
+
+
+async def count_owner_inquiries_db(owner_id: str) -> int:
+    return await inquiry_collection.count_documents({"owner_id": owner_id})
+
+
+async def count_owner_total_views_db(owner_id: str) -> int:
+    pipeline = [
+        {"$match": {"owner_id": owner_id}},
+        {"$group": {"_id": None, "total": {"$sum": {"$ifNull": ["$view_count", 0]}}}},
+    ]
+    rows = await property_collection.aggregate(pipeline).to_list(length=1)
+    if not rows:
+        return 0
+    return int(rows[0].get("total", 0) or 0)
 
 async def get_all_cities(owner_id: str) -> List[str]:
     """
@@ -610,5 +722,152 @@ async def consume_company_daily_ai_quota(owner_user_id: str, daily_limit: int = 
         "used": next_count,
         "remaining": max(daily_limit - next_count, 0),
         "date": today,
+    }
+
+
+async def get_platform_stats_db() -> Dict[str, int]:
+    """
+    Return global platform stats for platform owner dashboard.
+    """
+    total_users = await user_collection.count_documents({})
+    total_owners = await user_collection.count_documents(
+        {"$or": [{"role": "owner"}, {"role": None}, {"role": {"$exists": False}}]}
+    )
+    total_employees = await user_collection.count_documents({"role": "employee"})
+    total_offices = await company_collection.count_documents({})
+    total_properties = await property_collection.count_documents({})
+    subscribed_offices = await company_collection.count_documents({"is_subscribed": True})
+    trialing_offices = await company_collection.count_documents({"billing_status": "trialing"})
+    unsubscribed_offices = await company_collection.count_documents({"is_subscribed": False})
+
+    return {
+        "total_users": total_users,
+        "total_owners": total_owners,
+        "total_employees": total_employees,
+        "total_offices": total_offices,
+        "total_properties": total_properties,
+        "subscribed_offices": subscribed_offices,
+        "trialing_offices": trialing_offices,
+        "unsubscribed_offices": unsubscribed_offices,
+    }
+
+
+async def get_platform_offices_overview_db(limit: int = 500) -> List[Dict[str, Any]]:
+    """
+    List offices with aggregate counts for platform admin dashboard.
+    """
+    results: List[Dict[str, Any]] = []
+    cursor = company_collection.find({}).sort("updated_at", -1).limit(limit)
+    async for company_doc in cursor:
+        company = company_helper(company_doc)
+        owner_id = company.get("owner_user_id")
+        if not owner_id:
+            continue
+
+        owner_email: Optional[str] = None
+        if owner_id:
+            try:
+                owner = await user_collection.find_one({"_id": ObjectId(owner_id)})
+            except Exception:
+                owner = None
+            if owner:
+                owner_email = owner.get("email")
+
+        total_employees = await user_collection.count_documents(
+            {"company_owner_id": owner_id, "role": "employee"}
+        )
+        total_properties = await property_collection.count_documents({"owner_id": owner_id})
+
+        results.append(
+            {
+                "owner_user_id": owner_id,
+                "owner_email": owner_email,
+                "company_name": company.get("company_name"),
+                "plan_key": company.get("plan_key", "starter"),
+                "is_subscribed": bool(company.get("is_subscribed", False)),
+                "billing_status": company.get("billing_status"),
+                "trial_used": bool(company.get("trial_used", False)),
+                "subscription_started_at": company.get("subscription_started_at"),
+                "subscription_ends_at": company.get("subscription_ends_at"),
+                "total_properties": int(total_properties),
+                "total_employees": int(total_employees),
+                "created_at": company.get("created_at"),
+                "updated_at": company.get("updated_at"),
+            }
+        )
+    return results
+
+
+async def get_platform_office_detail_db(owner_user_id: str, properties_limit: int = 200) -> Optional[Dict[str, Any]]:
+    """
+    Return full office details including employees and properties.
+    """
+    company_doc = await company_collection.find_one({"owner_user_id": owner_user_id})
+    if not company_doc:
+        return None
+    company = company_helper(company_doc)
+
+    owner_email: Optional[str] = None
+    try:
+        owner = await user_collection.find_one({"_id": ObjectId(owner_user_id)})
+    except Exception:
+        owner = None
+    if owner:
+        owner_email = owner.get("email")
+
+    employees: List[Dict[str, Any]] = []
+    async for emp in user_collection.find(
+        {"company_owner_id": owner_user_id, "role": "employee"}
+    ).sort("email", 1):
+        helper = user_helper(emp)
+        if helper:
+            employees.append(
+                {
+                    "id": helper.get("id") or "",
+                    "email": helper.get("email") or "",
+                    "role": helper.get("role", "employee"),
+                    "status": helper.get("status", "active"),
+                    "permissions": helper.get("permissions") or {},
+                }
+            )
+
+    total_properties = await property_collection.count_documents({"owner_id": owner_user_id})
+
+    properties: List[Dict[str, Any]] = []
+    async for prop in (
+        property_collection.find({"owner_id": owner_user_id}).sort("_id", -1).limit(properties_limit)
+    ):
+        p = property_helper(prop)
+        properties.append(
+            {
+                "id": p.get("id"),
+                "city": p.get("city") or "غير مذكور",
+                "neighborhood": p.get("neighborhood") or "غير مذكور",
+                "property_type": p.get("property_type") or "غير مذكور",
+                "area": float(p.get("area") or 0.0),
+                "price": float(p.get("price") or 0.0),
+                "owner_name": p.get("owner_name"),
+            }
+        )
+
+    return {
+        "owner_user_id": owner_user_id,
+        "owner_email": owner_email,
+        "company_name": company.get("company_name"),
+        "plan_key": company.get("plan_key", "starter"),
+        "is_subscribed": bool(company.get("is_subscribed", False)),
+        "billing_status": company.get("billing_status"),
+        "trial_used": bool(company.get("trial_used", False)),
+        "subscription_started_at": company.get("subscription_started_at"),
+        "subscription_ends_at": company.get("subscription_ends_at"),
+        "total_properties": int(total_properties),
+        "total_employees": len(employees),
+        "created_at": company.get("created_at"),
+        "updated_at": company.get("updated_at"),
+        "contact_phone": company.get("contact_phone"),
+        "official_email": company.get("official_email"),
+        "subdomain": company.get("subdomain"),
+        "employees": employees,
+        "properties": properties,
     }
 

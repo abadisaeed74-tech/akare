@@ -41,8 +41,8 @@ const AuthPage: React.FC = () => {
   };
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <Card style={{ width: 420 }}>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)', padding: 16 }}>
+      <Card style={{ width: 440, borderRadius: 18, border: '1px solid #e4e7df', boxShadow: '0 14px 30px rgba(41,66,49,0.08)' }}>
         <Title level={4} style={{ textAlign: 'center', marginBottom: 24 }}>
           لوحة دخول المكاتب العقارية
         </Title>
@@ -70,7 +70,7 @@ const AuthPage: React.FC = () => {
                     <Input.Password />
                   </Form.Item>
                   <Form.Item>
-                    <Button type="primary" htmlType="submit" block>
+                    <Button type="primary" htmlType="submit" block style={{ background: '#3f7d3c' }}>
                       دخول
                     </Button>
                   </Form.Item>
@@ -97,7 +97,7 @@ const AuthPage: React.FC = () => {
                     <Input.Password />
                   </Form.Item>
                   <Form.Item>
-                    <Button type="primary" htmlType="submit" block>
+                    <Button type="primary" htmlType="submit" block style={{ background: '#3f7d3c' }}>
                       تسجيل
                     </Button>
                   </Form.Item>

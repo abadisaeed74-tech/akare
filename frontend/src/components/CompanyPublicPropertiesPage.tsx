@@ -62,7 +62,7 @@ const CompanyPublicPropertiesPage: React.FC = () => {
     <div
       style={{
         minHeight: '100vh',
-        background: '#f5f5f5',
+        background: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)',
         padding: '24px 8px',
         direction: 'rtl',
         display: 'flex',
@@ -70,7 +70,7 @@ const CompanyPublicPropertiesPage: React.FC = () => {
       }}
     >
       <Card
-        style={{ width: '100%', maxWidth: 900, boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}
+        style={{ width: '100%', maxWidth: 960, boxShadow: '0 12px 28px rgba(41,66,49,0.08)', borderRadius: 18, border: '1px solid #e4e7df' }}
         bodyStyle={{ padding: 24 }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -200,7 +200,7 @@ const CompanyPublicPropertiesPage: React.FC = () => {
                   >
                     {property.images && property.images.length > 0 ? (
                       <Image.PreviewGroup>
-                        <Carousel dots={property.images.length > 1} arrows>
+                        <Carousel dots={property.images.length > 1}>
                           {property.images.map((url, index) => (
                             <div
                               key={index}
@@ -290,13 +290,13 @@ const CompanyPublicPropertiesPage: React.FC = () => {
 
                   <div style={{ marginTop: 12 }}>
                     <Button
-                      type="link"
+                      type="primary"
                       onClick={() => {
                         if (property.id) {
                           navigate(`/share/${property.id}`);
                         }
                       }}
-                      style={{ padding: 0, fontWeight: 500 }}
+                      style={{ borderRadius: 999, fontWeight: 500, background: '#3f7d3c' }}
                     >
                       عرض تفاصيل العرض
                     </Button>

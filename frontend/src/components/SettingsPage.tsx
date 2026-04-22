@@ -923,12 +923,12 @@ const SettingsPage: React.FC = () => {
   };
 
   return (
-    <Layout style={{ minHeight: '100vh', direction: 'rtl' }}>
+    <Layout style={{ minHeight: '100vh', direction: 'rtl', background: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)', padding: 14 }}>
       <Sider
         width={240}
-        style={{ background: '#fff', borderLeft: '1px solid #f0f0f0' }}
+        style={{ background: '#ffffff', borderLeft: '1px solid #e4e7df', borderRadius: 18, overflow: 'hidden' }}
       >
-        <div style={{ padding: 16, borderBottom: '1px solid #f0f0f0', textAlign: 'center' }}>
+        <div style={{ padding: 16, borderBottom: '1px solid #e4e7df', textAlign: 'center' }}>
           <Title level={4} style={{ margin: 0 }}>
             إعدادات المنصة
           </Title>
@@ -939,6 +939,7 @@ const SettingsPage: React.FC = () => {
         <Menu
           mode="inline"
           selectedKeys={[section]}
+          style={{ borderInlineEnd: 'none' }}
           onClick={(e) => {
             if (e.key === 'dashboard') {
               navigate('/app');
@@ -972,7 +973,9 @@ const SettingsPage: React.FC = () => {
               قم بإدارة إعدادات منصتك العقارية بما يناسب احتياج مكتبك في السعودية.
             </Text>
           </div>
-          {renderSection()}
+          <div style={{ background: '#fff', border: '1px solid #e4e7df', borderRadius: 16, padding: 12, boxShadow: '0 10px 24px rgba(41,66,49,0.07)' }}>
+            {renderSection()}
+          </div>
         </Content>
       </Layout>
     </Layout>
