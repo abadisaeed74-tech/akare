@@ -11,6 +11,7 @@ import {
   EyeOutlined,
   PhoneOutlined,
 } from '@ant-design/icons';
+import PlatformLogo from './PlatformLogo';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -90,7 +91,9 @@ const LandingPage: React.FC = () => {
           bodyStyle={{ padding: '10px 16px' }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <Text strong style={{ fontSize: 20, color: palette.navBrand }}>عقاري</Text>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <PlatformLogo width={128} />
+            </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               {navItems.map((item) => (
                 <a

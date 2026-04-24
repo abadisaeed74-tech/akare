@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, Tabs, Form, Input, Button, Typography, message } from 'antd';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { registerUser, loginUser, getCurrentUser, setAuthToken } from '../services/api';
+import PlatformLogo from './PlatformLogo';
 
 const { Title, Text } = Typography;
 
@@ -43,6 +44,9 @@ const AuthPage: React.FC = () => {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)', padding: 16 }}>
       <Card style={{ width: 440, borderRadius: 18, border: '1px solid #e4e7df', boxShadow: '0 14px 30px rgba(41,66,49,0.08)' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+          <PlatformLogo width={150} />
+        </div>
         <Title level={4} style={{ textAlign: 'center', marginBottom: 24 }}>
           لوحة دخول المكاتب العقارية
         </Title>

@@ -4,6 +4,7 @@ import { Card, Typography, Spin, Alert, Image, Button, Modal, Avatar, Tag, Form,
 import { EnvironmentOutlined, ShareAltOutlined, HeartOutlined, SaveOutlined, EyeOutlined, MessageOutlined } from '@ant-design/icons';
 import type { Property, PublicCompany } from '../services/api';
 import { getPublicProperty, getPublicCompany, resolveMediaUrl, createPublicPropertyInquiry } from '../services/api';
+import PlatformLogo from './PlatformLogo';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -97,7 +98,7 @@ const PublicPropertyPage: React.FC = () => {
                         </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-                        <Text type="secondary">منصة عقاري</Text>
+                        <PlatformLogo width={118} />
                         {property.owner_id && (
                             <Button
                                 type="primary"

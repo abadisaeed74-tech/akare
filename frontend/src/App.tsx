@@ -35,6 +35,7 @@ import PropertyForm from './components/PropertyForm';
 import NavigationTree from './components/NavigationTree';
 import PropertyList from './components/PropertyList';
 import Search from 'antd/es/input/Search';
+import PlatformLogo from './components/PlatformLogo';
 
 
 const { Header, Content, Sider } = Layout;
@@ -210,7 +211,9 @@ const App: React.FC = () => {
                 }}
             >
                 <div style={{ padding: '18px 16px 12px', borderBottom: palette.glassBorder }}>
-                    <Title level={4} style={{ color: palette.text, margin: 0 }}>عقاري</Title>
+                    <div style={{ marginBottom: 6 }}>
+                        <PlatformLogo width={92} />
+                    </div>
                     <Text style={{ color: palette.textMuted, fontSize: 12 }}>{companyName || 'مكتبك العقاري'}</Text>
                     <Button
                         type="primary"
