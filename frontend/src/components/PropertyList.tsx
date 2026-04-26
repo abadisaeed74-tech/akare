@@ -396,6 +396,10 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                 title="تفاصيل العرض العقاري"
                 open={isDetailsModalVisible}
                 onCancel={handleDetailsModalClose}
+                styles={{
+                    header: { direction: 'rtl', textAlign: 'right' },
+                    body: { direction: 'rtl', textAlign: 'right' },
+                }}
                 footer={[
                     <Button key="close" type="primary" onClick={handleDetailsModalClose}>
                         إغلاق
