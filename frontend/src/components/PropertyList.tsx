@@ -577,21 +577,36 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                             </Paragraph>
                         )}
                         {detailsProperty.images && detailsProperty.images.length > 0 && (
-                            <Carousel
-                                dots={detailsProperty.images.length > 1}
-                                arrows
-                                style={{ marginBottom: 16 }}
+                            <Image.PreviewGroup
+                                items={detailsProperty.images.map((url) => resolveMediaUrl(url))}
                             >
-                                {detailsProperty.images.map((url, index) => (
-                                    <div key={index}>
-                                        <Image
-                                            src={resolveMediaUrl(url)}
-                                            alt={`صورة ${index + 1}`}
-                                            style={{ width: '100%', maxHeight: 300, objectFit: 'cover', borderRadius: 8 }}
-                                        />
-                                    </div>
-                                ))}
-                            </Carousel>
+                                <div
+                                    style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                                        gap: 10,
+                                        marginBottom: 16,
+                                    }}
+                                >
+                                    {detailsProperty.images.map((url, index) => (
+                                        <div
+                                            key={`${url}-${index}`}
+                                            style={{
+                                                borderRadius: 10,
+                                                overflow: 'hidden',
+                                                height: 120,
+                                                background: '#f1f5f9',
+                                            }}
+                                        >
+                                            <Image
+                                                src={resolveMediaUrl(url)}
+                                                alt={`صورة ${index + 1}`}
+                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            </Image.PreviewGroup>
                         )}
                         {detailsProperty.videos && detailsProperty.videos.length > 0 && (
                              <Paragraph>

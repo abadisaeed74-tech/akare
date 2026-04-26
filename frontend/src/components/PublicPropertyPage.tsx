@@ -16,6 +16,12 @@ const normalizeExternalHref = (value?: string | null): string | null => {
     return `https://${text.replace(/^\/+/, '')}`;
 };
 
+const hasMeaningfulText = (value?: string | null): boolean => {
+    if (!value) return false;
+    const text = value.trim();
+    return text !== '' && text !== 'غير مذكور';
+};
+
 const PublicPropertyPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
@@ -73,6 +79,11 @@ const PublicPropertyPage: React.FC = () => {
     }
 
     const mapHref = normalizeExternalHref(property.map_url);
+    const propertyTypeLabel = hasMeaningfulText(property.property_type) ? property.property_type : 'عقار';
+    const cityLabel = hasMeaningfulText(property.city) ? property.city : '';
+    const neighborhoodLabel = hasMeaningfulText(property.neighborhood) ? property.neighborhood : '';
+    const locationLabel = [neighborhoodLabel, cityLabel].filter(Boolean).join('، ');
+    const galleryItems = (property.images || []).map((url) => resolveMediaUrl(url)).filter(Boolean);
 
     return (
         <div
@@ -135,8 +146,8 @@ const PublicPropertyPage: React.FC = () => {
                 >
                     <div style={{ flex: '2 1 240px', minWidth: 0 }}>
                         <Title level={2} style={{ margin: 0, lineHeight: 1.3 }}>
-                            {property.property_type || 'عقار'} في{' '}
-                            {property.city || 'مدينة غير مذكورة'}
+                            {propertyTypeLabel}
+                            {cityLabel ? ` في ${cityLabel}` : ''}
                         </Title>
                         <div
                             style={{
@@ -148,11 +159,12 @@ const PublicPropertyPage: React.FC = () => {
                             }}
                         >
                             <Tag color="green">عرض عقاري</Tag>
-                            <Text type="secondary">
-                                <EnvironmentOutlined style={{ marginLeft: 4 }} />
-                                {property.neighborhood || 'حي غير مذكور'}
-                                {property.city ? `، ${property.city}` : ''}
-                            </Text>
+                            {locationLabel && (
+                                <Text type="secondary">
+                                    <EnvironmentOutlined style={{ marginLeft: 4 }} />
+                                    {locationLabel}
+                                </Text>
+                            )}
                         </div>
                     </div>
                     <div style={{ flex: '1 0 200px', minWidth: 200, textAlign: 'left' }}>
@@ -163,7 +175,7 @@ const PublicPropertyPage: React.FC = () => {
                                       style: 'currency',
                                       currency: 'SAR',
                                   })
-                                : 'غير مذكور'}
+                                : 'السعر عند التواصل'}
                         </Title>
                         <div
                             style={{
@@ -185,65 +197,33 @@ const PublicPropertyPage: React.FC = () => {
                     </div>
                 </div>
 
-                {property.images && property.images.length > 0 && (
-                    <Image.PreviewGroup>
+                {galleryItems.length > 0 && (
+                    <Image.PreviewGroup items={galleryItems}>
                         <div
                             style={{
-                                display: 'flex',
-                                flexWrap: 'wrap',
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
                                 gap: 12,
                                 marginBottom: 24,
                             }}
                         >
-                            <div
-                                style={{
-                                    flex: '3 1 260px',
-                                    minWidth: 260,
-                                    height: 320,
-                                    borderRadius: 16,
-                                    overflow: 'hidden',
-                                    backgroundColor: '#000',
-                                }}
-                            >
-                                <Image
-                                    src={resolveMediaUrl(property.images[0])}
-                                    alt="صورة العقار الرئيسية"
-                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                />
-                            </div>
-                            {property.images.length > 1 && (
+                            {galleryItems.map((url, index) => (
                                 <div
+                                    key={`${url}-${index}`}
                                     style={{
-                                        flex: '1 1 140px',
-                                        minWidth: 140,
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: 8,
+                                        height: 150,
+                                        borderRadius: 12,
+                                        overflow: 'hidden',
+                                        background: '#0f172a',
                                     }}
                                 >
-                                    {property.images.slice(1, 4).map((url, index) => (
-                                        <div
-                                            key={index}
-                                            style={{
-                                                width: '100%',
-                                                height: 96,
-                                                borderRadius: 12,
-                                                overflow: 'hidden',
-                                            }}
-                                        >
-                                            <Image
-                                                src={resolveMediaUrl(url)}
-                                                alt={`صورة إضافية ${index + 1}`}
-                                                style={{
-                                                    width: '100%',
-                                                    height: '100%',
-                                                    objectFit: 'cover',
-                                                }}
-                                            />
-                                        </div>
-                                    ))}
+                                    <Image
+                                        src={url}
+                                        alt={`صورة العقار ${index + 1}`}
+                                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                    />
                                 </div>
-                            )}
+                            ))}
                         </div>
                     </Image.PreviewGroup>
                 )}
@@ -252,53 +232,48 @@ const PublicPropertyPage: React.FC = () => {
                     <Text strong>رقم العرض: </Text>
                     {property.property_code || 'غير متوفر'}
                 </Paragraph>
-                <Paragraph>
-                    <Text strong>المدينة: </Text>
-                    {property.city || 'غير مذكور'}
-                </Paragraph>
-                <Paragraph>
-                    <Text strong>الحي: </Text>
-                    {property.neighborhood || 'غير مذكور'}
-                </Paragraph>
-                <Paragraph>
-                    <Text strong>نوع العقار: </Text>
-                    {property.property_type || 'غير مذكور'}
-                </Paragraph>
-                <Paragraph>
-                    <Text strong>المساحة: </Text>
-                    {property.area
-                        ? `${property.area.toLocaleString()} م²`
-                        : 'غير مذكور'}
-                </Paragraph>
-                <Paragraph>
-                    <Text strong>السعر المطلوب: </Text>
-                    {property.price && property.price !== 0
-                        ? property.price.toLocaleString('ar-SA', { style: 'currency', currency: 'SAR' })
-                        : 'غير مذكور'}
-                </Paragraph>
-                <Paragraph>
-                    <Text strong>تفاصيل إضافية: </Text>
-                    {property.details || 'غير مذكور'}
-                </Paragraph>
-                <Paragraph>
-                    <Text strong>اسم المالك: </Text>
-                    {property.owner_name || 'غير مذكور'}
-                </Paragraph>
-                <Paragraph>
-                    <Text strong>رقم المالك: </Text>
-                    {property.owner_contact_number || 'غير مذكور'}
-                </Paragraph>
-                {property.marketer_contact_number && (
+                {hasMeaningfulText(property.city) && (
                     <Paragraph>
-                        <Text strong>رقم المسوّق: </Text>
-                        {property.marketer_contact_number}
+                        <Text strong>المدينة: </Text>
+                        {property.city}
                     </Paragraph>
                 )}
-
-                <Paragraph>
-                    <Text strong>وصف العرض: </Text>
-                    {property.formatted_description || 'غير مذكور'}
-                </Paragraph>
+                {hasMeaningfulText(property.neighborhood) && (
+                    <Paragraph>
+                        <Text strong>الحي: </Text>
+                        {property.neighborhood}
+                    </Paragraph>
+                )}
+                {hasMeaningfulText(property.property_type) && (
+                    <Paragraph>
+                        <Text strong>نوع العقار: </Text>
+                        {property.property_type}
+                    </Paragraph>
+                )}
+                {typeof property.area === 'number' && property.area > 0 && (
+                    <Paragraph>
+                        <Text strong>المساحة: </Text>
+                        {`${property.area.toLocaleString()} م²`}
+                    </Paragraph>
+                )}
+                {typeof property.price === 'number' && property.price > 0 && (
+                    <Paragraph>
+                        <Text strong>السعر المطلوب: </Text>
+                        {property.price.toLocaleString('ar-SA', { style: 'currency', currency: 'SAR' })}
+                    </Paragraph>
+                )}
+                {hasMeaningfulText(property.details) && (
+                    <Paragraph>
+                        <Text strong>تفاصيل إضافية: </Text>
+                        {property.details}
+                    </Paragraph>
+                )}
+                {hasMeaningfulText(property.formatted_description) && (
+                    <Paragraph>
+                        <Text strong>وصف العرض: </Text>
+                        {property.formatted_description}
+                    </Paragraph>
+                )}
 
                 {property.videos && property.videos.length > 0 && (
                     <>
@@ -394,16 +369,14 @@ const PublicPropertyPage: React.FC = () => {
                     </>
                 )}
 
-                <Paragraph>
-                    <Text strong>موقع العقار على الخريطة: </Text>
-                    {mapHref ? (
+                {mapHref && (
+                    <Paragraph>
+                        <Text strong>موقع العقار على الخريطة: </Text>
                         <a href={mapHref} target="_blank" rel="noopener noreferrer">
                             فتح في Google Maps
                         </a>
-                    ) : (
-                        'غير مذكور'
-                    )}
-                </Paragraph>
+                    </Paragraph>
+                )}
 
                 <div style={{ marginTop: 24, textAlign: 'center' }}>
                     <Button type="primary" icon={<MessageOutlined />} onClick={() => setInquiryOpen(true)} style={{ background: '#3f7d3c' }}>

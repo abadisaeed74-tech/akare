@@ -1800,6 +1800,7 @@ async def search_properties_endpoint(
     """
     search_query = {
         "$or": [
+            {"property_code": {"$regex": q, "$options": "i"}},
             {"city": {"$regex": q, "$options": "i"}},
             {"neighborhood": {"$regex": q, "$options": "i"}},
             {"details": {"$regex": q, "$options": "i"}},
