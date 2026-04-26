@@ -211,12 +211,8 @@ export const uploadFile = async (file: File): Promise<string> => {
   const response = await apiClient.post('/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
-  const path = response.data.url as string;
-  // Store absolute URL on the client so clicking in upload list لا يمر عبر React Router
-  if (path.startsWith('http://') || path.startsWith('https://')) {
-    return path;
-  }
-  return `${API_BASE_URL}${path}`;
+  // Keep host-agnostic path in DB, resolve absolute URL only at render time.
+  return response.data.url as string;
 };
 
 export const createProperty = async (payload: {
@@ -485,6 +481,9 @@ export const resolveMediaUrl = (path: string): string => {
     try {
       const url = new URL(path);
       const hostname = url.hostname;
+      if (url.pathname.startsWith('/uploads/')) {
+        return `${API_BASE_URL}${url.pathname}`;
+      }
 
       // لو كان مخزن كرابط لوكال (localhost / 127.0.0.1 / 0.0.0.0) نحوله للباصلينك الحالي
       if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {

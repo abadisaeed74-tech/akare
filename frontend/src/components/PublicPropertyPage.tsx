@@ -8,6 +8,14 @@ import PlatformLogo from './PlatformLogo';
 
 const { Title, Text, Paragraph } = Typography;
 
+const normalizeExternalHref = (value?: string | null): string | null => {
+    if (!value) return null;
+    const text = value.trim();
+    if (!text) return null;
+    if (/^https?:\/\//i.test(text)) return text;
+    return `https://${text.replace(/^\/+/, '')}`;
+};
+
 const PublicPropertyPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
@@ -63,6 +71,8 @@ const PublicPropertyPage: React.FC = () => {
             </div>
         );
     }
+
+    const mapHref = normalizeExternalHref(property.map_url);
 
     return (
         <div
@@ -382,8 +392,8 @@ const PublicPropertyPage: React.FC = () => {
 
                 <Paragraph>
                     <Text strong>موقع العقار على الخريطة: </Text>
-                    {property.map_url ? (
-                        <a href={property.map_url} target="_blank" rel="noopener noreferrer">
+                    {mapHref ? (
+                        <a href={mapHref} target="_blank" rel="noopener noreferrer">
                             فتح في Google Maps
                         </a>
                     ) : (

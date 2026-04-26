@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 import os
 import re
 import stripe
+from urllib.parse import urlparse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from models import (
@@ -104,6 +105,40 @@ def normalize_neighborhood(name: Optional[str]) -> Optional[str]:
         return name
     # For now, just trim spaces; you can extend this with more aliases if needed
     return name.strip()
+
+
+def normalize_external_url(value: Optional[str]) -> Optional[str]:
+    """
+    Ensure external URLs are absolute (https://...) for reliable public links.
+    """
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if re.match(r"^https?://", text, re.IGNORECASE):
+        return text
+    # If user entered domain/path without scheme, force https
+    return f"https://{text.lstrip('/')}"
+
+
+def normalize_media_path(value: str) -> str:
+    """
+    Store uploads paths in a host-agnostic way when possible.
+    Converts absolute URLs ending with /uploads/... to relative /uploads/...
+    """
+    text = (value or "").strip()
+    if not text:
+        return text
+    if text.startswith("/uploads/"):
+        return text
+    try:
+        parsed = urlparse(text)
+        if parsed.path.startswith("/uploads/"):
+            return parsed.path
+    except Exception:
+        pass
+    return text
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -1421,7 +1456,10 @@ async def create_property_endpoint(
     processed_data["images"] = property_input.images or []
     processed_data["videos"] = property_input.videos or []
     processed_data["documents"] = property_input.documents or []
-    processed_data["map_url"] = property_input.map_url
+    processed_data["images"] = [normalize_media_path(v) for v in processed_data["images"] if isinstance(v, str)]
+    processed_data["videos"] = [normalize_media_path(v) for v in processed_data["videos"] if isinstance(v, str)]
+    processed_data["documents"] = [normalize_media_path(v) for v in processed_data["documents"] if isinstance(v, str)]
+    processed_data["map_url"] = normalize_external_url(property_input.map_url)
 
     # Normalize numeric fields that the AI might return as null or strings
     # to avoid Pydantic validation errors for required float fields.
@@ -1549,6 +1587,15 @@ async def update_property_endpoint(
         update_data["city"] = normalize_city(update_data.get("city"))
     if "neighborhood" in update_data:
         update_data["neighborhood"] = normalize_neighborhood(update_data.get("neighborhood"))
+    if "map_url" in update_data:
+        update_data["map_url"] = normalize_external_url(update_data.get("map_url"))
+    for media_field in ("images", "videos", "documents"):
+        if media_field in update_data and isinstance(update_data.get(media_field), list):
+            update_data[media_field] = [
+                normalize_media_path(v)
+                for v in (update_data.get(media_field) or [])
+                if isinstance(v, str)
+            ]
 
     updated = await update_property_db(property_id, update_data)
     if not updated:
