@@ -141,7 +141,8 @@ def normalize_media_path(value: str) -> str:
     return text
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "").strip() or os.path.join(BASE_DIR, "uploads")
+UPLOAD_DIR = os.path.abspath(os.path.expanduser(UPLOAD_DIR))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
