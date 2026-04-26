@@ -1,6 +1,8 @@
 import os
+import secrets
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 import motor.motor_asyncio
 from bson import ObjectId
@@ -20,8 +22,73 @@ property_collection = database.get_collection("properties")
 user_collection = database.get_collection("users")
 company_collection = database.get_collection("companies")
 inquiry_collection = database.get_collection("property_inquiries")
+PROPERTY_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 # Helper to convert document from DB
+def _normalize_media_value(value: Any) -> Optional[str]:
+    if isinstance(value, dict):
+        # Backward compatibility for legacy shapes like { url: "...", ... }
+        value = value.get("url") or value.get("path")
+    if not isinstance(value, str):
+        return None
+    text = value.strip().replace("\\", "/")
+    if not text:
+        return None
+    if text.startswith("/uploads/"):
+        return text
+    if text.startswith("uploads/"):
+        return f"/{text}"
+    if text.startswith("http://") or text.startswith("https://"):
+        try:
+            parsed = urlparse(text)
+            if parsed.path.startswith("/uploads/"):
+                return parsed.path
+        except Exception:
+            return text
+        return text
+    if "/uploads/" in text:
+        return text[text.find("/uploads/") :]
+    # Legacy fallback: plain filename saved without folder
+    if "/" not in text:
+        return f"/uploads/{text}"
+    return text if text.startswith("/") else f"/{text}"
+
+
+def _normalize_media_list(values: Any) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: List[str] = []
+    for value in values:
+        item = _normalize_media_value(value)
+        if item:
+            normalized.append(item)
+    return normalized
+
+
+def _fallback_property_code(_id: Any) -> Optional[str]:
+    """
+    Deterministic fallback code for old records that don't have property_code.
+    """
+    if _id is None:
+        return None
+    text = str(_id).strip()
+    if len(text) < 6:
+        return text.upper() if text else None
+    return text[-6:].upper()
+
+
+async def _generate_unique_property_code(length: int = 6) -> str:
+    """
+    Create a short unique code for each property.
+    Uses readable chars only (no confusing 0/O and 1/I).
+    """
+    while True:
+        code = "".join(secrets.choice(PROPERTY_CODE_ALPHABET) for _ in range(length))
+        exists = await property_collection.find_one({"property_code": code}, {"_id": 1})
+        if not exists:
+            return code
+
+
 def property_helper(property) -> dict:
     # Safely handle documents that might have a null _id (from older buggy inserts)
     _id = property.get("_id")
@@ -40,10 +107,11 @@ def property_helper(property) -> dict:
         "formatted_description": property.get("formatted_description"),
         "raw_text": property["raw_text"],
         "owner_id": property.get("owner_id"),
+        "property_code": property.get("property_code") or _fallback_property_code(_id),
         "region_within_city": property.get("region_within_city"),
-        "images": property.get("images", []),
-        "videos": property.get("videos", []),
-        "documents": property.get("documents", []),
+        "images": _normalize_media_list(property.get("images", [])),
+        "videos": _normalize_media_list(property.get("videos", [])),
+        "documents": _normalize_media_list(property.get("documents", [])),
         "map_url": property.get("map_url"),
         "view_count": int(property.get("view_count", 0) or 0),
     }
@@ -56,6 +124,8 @@ async def add_property(property_data: Property, owner_id: str) -> dict:
     # can generate a proper ObjectId automatically.
     property_dict = property_data.model_dump(by_alias=True, exclude_none=True)
     property_dict["owner_id"] = owner_id
+    if not property_dict.get("property_code"):
+        property_dict["property_code"] = await _generate_unique_property_code()
     property_dict.setdefault("view_count", 0)
     property_dict.setdefault("created_at", datetime.utcnow())
     result = await property_collection.insert_one(property_dict)

@@ -43,6 +43,7 @@ if (existingToken) {
 
 export interface Property {
   id: string | null;
+  property_code?: string | null;
   city: string;
   neighborhood: string;
   property_type: string;
@@ -475,11 +476,13 @@ export const updateInquiryStatus = async (
 
 export const resolveMediaUrl = (path: string): string => {
   if (!path) return '';
+  const normalizedInput = String(path).trim().replace(/\\/g, '/');
+  if (!normalizedInput) return '';
 
   // لو الرابط كامل (ABSOLUTE URL)
-  if (path.startsWith('http://') || path.startsWith('https://')) {
+  if (normalizedInput.startsWith('http://') || normalizedInput.startsWith('https://')) {
     try {
-      const url = new URL(path);
+      const url = new URL(normalizedInput);
       const hostname = url.hostname;
       if (url.pathname.startsWith('/uploads/')) {
         return `${API_BASE_URL}${url.pathname}`;
@@ -491,13 +494,33 @@ export const resolveMediaUrl = (path: string): string => {
       }
 
       // غير كذا خله زي ما هو (مثلاً Google Maps أو دومين عام)
-      return path;
+      return normalizedInput;
     } catch {
       // لو فشل الـ URL parsing نرجع المسار كما هو
-      return path;
+      return normalizedInput;
     }
   }
 
-  // لو كان المسار نسبي مثل /uploads/xxx
-  return `${API_BASE_URL}${path}`;
+  if (normalizedInput.startsWith('/uploads/')) {
+    return `${API_BASE_URL}${normalizedInput}`;
+  }
+
+  if (normalizedInput.startsWith('uploads/')) {
+    return `${API_BASE_URL}/${normalizedInput}`;
+  }
+
+  const uploadsMarkerIndex = normalizedInput.indexOf('/uploads/');
+  if (uploadsMarkerIndex >= 0) {
+    return `${API_BASE_URL}${normalizedInput.slice(uploadsMarkerIndex)}`;
+  }
+
+  // Legacy fallback: only file name saved in DB
+  if (!normalizedInput.includes('/')) {
+    return `${API_BASE_URL}/uploads/${normalizedInput}`;
+  }
+
+  // Generic relative path
+  return normalizedInput.startsWith('/')
+    ? `${API_BASE_URL}${normalizedInput}`
+    : `${API_BASE_URL}/${normalizedInput}`;
 };

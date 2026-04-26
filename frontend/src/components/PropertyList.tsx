@@ -405,6 +405,10 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                 {detailsProperty && (
                     <div style={{ lineHeight: 2 }}>
                         <Paragraph>
+                            <Text strong>رقم العرض: </Text>
+                            {formatOrPlaceholder(detailsProperty.property_code || '')}
+                        </Paragraph>
+                        <Paragraph>
                             <Text strong>المدينة: </Text>
                             {formatOrPlaceholder(detailsProperty.city)}
                         </Paragraph>

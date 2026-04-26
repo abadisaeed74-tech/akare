@@ -27,6 +27,7 @@ class Property(BaseModel):
     formatted_description: Optional[str] = None
     raw_text: str
     owner_id: Optional[str] = None
+    property_code: Optional[str] = None
     # Optional: relative region within the city, inferred automatically by AI
     # Examples: "شمال", "جنوب", "شرق", "غرب", "وسط", "غير مذكور"
     region_within_city: Optional[str] = None

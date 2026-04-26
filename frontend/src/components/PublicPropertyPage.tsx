@@ -249,6 +249,10 @@ const PublicPropertyPage: React.FC = () => {
                 )}
 
                 <Paragraph>
+                    <Text strong>رقم العرض: </Text>
+                    {property.property_code || 'غير متوفر'}
+                </Paragraph>
+                <Paragraph>
                     <Text strong>المدينة: </Text>
                     {property.city || 'غير مذكور'}
                 </Paragraph>
