@@ -406,7 +406,9 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                     <div style={{ lineHeight: 2 }}>
                         <Paragraph>
                             <Text strong>رقم العرض: </Text>
-                            {formatOrPlaceholder(detailsProperty.property_code || '')}
+                            <span dir="ltr" style={{ unicodeBidi: 'isolate', display: 'inline-block' }}>
+                                {formatOrPlaceholder(detailsProperty.property_code || '')}
+                            </span>
                         </Paragraph>
                         <Paragraph>
                             <Text strong>المدينة: </Text>
