@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Carousel, Image, Upload } from 'antd';
+import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Image, Upload } from 'antd';
 import type { UploadFile } from 'antd/es/upload/interface';
 import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, uploadFile, type UserPublic } from '../services/api';
 import { EyeOutlined } from '@ant-design/icons';
@@ -309,30 +309,19 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                                 <span>{(property.view_count || 0).toLocaleString('ar-SA')}</span>
                             </div>
                             {property.images && property.images.length > 0 ? (
-                                <Image.PreviewGroup>
-                                    <Carousel>
-                                        {property.images.map((url, index) => (
-                                            <div
-                                                key={index}
-                                                style={{
-                                                    width: '100%',
-                                                    height: '100%',
-                                                    overflow: 'hidden',
-                                                }}
-                                            >
-                                                <Image
-                                                    src={resolveMediaUrl(url)}
-                                                    alt={`صورة ${index + 1}`}
-                                                    style={{
-                                                        width: '100%',
-                                                        height: '100%',
-                                                        objectFit: 'cover',
-                                                        display: 'block',
-                                                    }}
-                                                />
-                                            </div>
-                                        ))}
-                                    </Carousel>
+                                <Image.PreviewGroup
+                                    items={property.images.map((url) => resolveMediaUrl(url))}
+                                >
+                                    <Image
+                                        src={resolveMediaUrl(property.images[0])}
+                                        alt="الصورة الرئيسية"
+                                        style={{
+                                            width: '100%',
+                                            height: '100%',
+                                            objectFit: 'cover',
+                                            display: 'block',
+                                        }}
+                                    />
                                 </Image.PreviewGroup>
                             ) : (
                                 <div
