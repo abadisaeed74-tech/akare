@@ -7,6 +7,8 @@ from passlib.context import CryptContext
 import os
 import re
 import stripe
+import cloudinary
+import cloudinary.uploader
 from urllib.parse import urlparse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -164,6 +166,13 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "").strip()
+CLOUDINARY_FOLDER = os.getenv("CLOUDINARY_FOLDER", "akare").strip() or "akare"
+CLOUDINARY_ENABLED = bool(
+    CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET
+)
 
 STRIPE_PRICE_IDS = {
     "starter": os.getenv("STRIPE_PRICE_STARTER_MONTHLY", "").strip(),
@@ -177,6 +186,14 @@ PRICE_ID_TO_PLAN_KEY = {
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
+if CLOUDINARY_ENABLED:
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD_NAME,
+        api_key=CLOUDINARY_API_KEY,
+        api_secret=CLOUDINARY_API_SECRET,
+        secure=True,
+    )
 
 # ==== AI settings ====
 try:
@@ -519,8 +536,8 @@ async def upload_file(
     current_user: UserPublic = Depends(get_current_user),
 ):
     """
-    Simple file upload endpoint for property media (images, videos, documents).
-    Saves the file under /uploads and returns a public URL.
+    File upload endpoint for property media (images, videos, documents).
+    Uses Cloudinary when configured, otherwise saves under /uploads.
     Requires permission to manage files for employees, and an active subscription plan.
     """
     # Enforce file management permissions (employees)
@@ -544,9 +561,36 @@ async def upload_file(
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     safe_name = "".join(c for c in original_name if c.isalnum() or c in {".", "_", "-"}) or "file"
     filename = f"{timestamp}_{safe_name}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
 
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="الملف فارغ، يرجى اختيار ملف صالح.")
+
+    if CLOUDINARY_ENABLED:
+        try:
+            result = cloudinary.uploader.upload(
+                content,
+                resource_type="auto",
+                folder=CLOUDINARY_FOLDER,
+                public_id=filename,
+                overwrite=False,
+                use_filename=False,
+                unique_filename=False,
+            )
+            cloud_url = (
+                result.get("secure_url")
+                or result.get("url")
+            )
+            if not cloud_url:
+                raise RuntimeError("Cloudinary did not return a URL.")
+            return {"url": cloud_url}
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="تعذر رفع الملف إلى Cloudinary. يرجى المحاولة لاحقًا.",
+            ) from exc
+
+    file_path = os.path.join(UPLOAD_DIR, filename)
     with open(file_path, "wb") as f:
         f.write(content)
 

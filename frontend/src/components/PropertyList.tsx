@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Carousel, Image } from 'antd';
-import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, type UserPublic } from '../services/api';
+import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Carousel, Image, Upload } from 'antd';
+import type { UploadFile } from 'antd/es/upload/interface';
+import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, uploadFile, type UserPublic } from '../services/api';
 import { EyeOutlined } from '@ant-design/icons';
 
 const { Text, Paragraph } = Typography;
@@ -17,10 +18,58 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
     const [isDetailsModalVisible, setIsDetailsModalVisible] = useState(false);
     const [detailsProperty, setDetailsProperty] = useState<Property | null>(null);
     const [editingProperty, setEditingProperty] = useState<Property | null>(null);
+    const [editImageFiles, setEditImageFiles] = useState<UploadFile[]>([]);
+    const [editVideoFiles, setEditVideoFiles] = useState<UploadFile[]>([]);
     const [form] = Form.useForm();
+
+    const toUploadList = (urls?: string[], prefix = 'file'): UploadFile[] =>
+        (urls || []).map((url, index) => ({
+            uid: `${prefix}-${index}-${url}`,
+            name: `${prefix}-${index + 1}`,
+            status: 'done',
+            url,
+        }));
+
+    const uploadAndStore = async (
+        file: UploadFile,
+        setter: React.Dispatch<React.SetStateAction<UploadFile[]>>,
+    ) => {
+        try {
+            const origin = file.originFileObj as File | undefined;
+            if (!origin) return;
+            const url = await uploadFile(origin);
+            setter((prev) =>
+                prev.map((f) =>
+                    f.uid === file.uid
+                        ? {
+                              ...f,
+                              url,
+                              status: 'done',
+                          }
+                        : f,
+                ),
+            );
+            message.success('تم رفع الملف بنجاح');
+        } catch (e) {
+            console.error(e);
+            setter((prev) =>
+                prev.map((f) =>
+                    f.uid === file.uid
+                        ? {
+                              ...f,
+                              status: 'error',
+                          }
+                        : f,
+                ),
+            );
+            message.error('فشل في رفع الملف');
+        }
+    };
 
     const openEditModal = (property: Property) => {
         setEditingProperty(property);
+        setEditImageFiles(toUploadList(property.images, 'image'));
+        setEditVideoFiles(toUploadList(property.videos, 'video'));
         form.setFieldsValue({
             city: property.city === 'غير مذكور' ? '' : property.city,
             neighborhood: property.neighborhood === 'غير مذكور' ? '' : property.neighborhood,
@@ -40,6 +89,8 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
     const handleModalCancel = () => {
         setIsModalVisible(false);
         setEditingProperty(null);
+        setEditImageFiles([]);
+        setEditVideoFiles([]);
         form.resetFields();
     };
 
@@ -60,8 +111,24 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                 message.error('لا يمكن تعديل هذا العرض لأن المعرّف غير صالح.');
                 return;
             }
+            const hasUploadingMedia =
+                [...editImageFiles, ...editVideoFiles].some((f) => f.status === 'uploading');
+            if (hasUploadingMedia) {
+                message.warning('يرجى انتظار اكتمال رفع الصور/الفيديو قبل حفظ التعديلات.');
+                return;
+            }
+            const images = editImageFiles
+                .map((f) => f.url)
+                .filter((u): u is string => typeof u === 'string');
+            const videos = editVideoFiles
+                .map((f) => f.url)
+                .filter((u): u is string => typeof u === 'string');
 
-            await updateProperty(editingProperty.id, values);
+            await updateProperty(editingProperty.id, {
+                ...values,
+                images,
+                videos,
+            });
             message.success('تم تحديث العرض بنجاح');
             handleModalCancel();
             if (onRefresh) onRefresh();
@@ -388,6 +455,51 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                     </Form.Item>
                     <Form.Item label="رقم المسوّق" name="marketer_contact_number">
                         <Input />
+                    </Form.Item>
+                    <Form.Item label="صور العقار (يمكن إضافة/حذف أكثر من صورة)">
+                        <Upload
+                            multiple
+                            listType="picture-card"
+                            fileList={editImageFiles}
+                            beforeUpload={(file) => {
+                                const uploadFileObj: UploadFile = {
+                                    uid: file.uid,
+                                    name: file.name,
+                                    status: 'uploading',
+                                    originFileObj: file,
+                                };
+                                setEditImageFiles((prev) => prev.concat(uploadFileObj));
+                                uploadAndStore(uploadFileObj, setEditImageFiles);
+                                return false;
+                            }}
+                            onRemove={(file) => {
+                                setEditImageFiles((prev) => prev.filter((f) => f.uid !== file.uid));
+                            }}
+                        >
+                            {editImageFiles.length >= 20 ? null : <div>+ إضافة صورة</div>}
+                        </Upload>
+                    </Form.Item>
+                    <Form.Item label="فيديوهات العقار (يمكن إضافة/حذف أكثر من فيديو)">
+                        <Upload
+                            multiple
+                            fileList={editVideoFiles}
+                            beforeUpload={(file) => {
+                                const uploadFileObj: UploadFile = {
+                                    uid: file.uid,
+                                    name: file.name,
+                                    status: 'uploading',
+                                    originFileObj: file,
+                                };
+                                setEditVideoFiles((prev) => prev.concat(uploadFileObj));
+                                uploadAndStore(uploadFileObj, setEditVideoFiles);
+                                return false;
+                            }}
+                            onRemove={(file) => {
+                                setEditVideoFiles((prev) => prev.filter((f) => f.uid !== file.uid));
+                            }}
+                        >
+                            <Button>إضافة فيديو</Button>
+                        </Upload>
                     </Form.Item>
                 </Form>
             </Modal>

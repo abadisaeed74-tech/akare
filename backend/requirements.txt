@@ -9,3 +9,4 @@ passlib[bcrypt]
 email-validator
 python-multipart
 stripe
+cloudinary

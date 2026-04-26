@@ -123,6 +123,7 @@ const PropertyForm: React.FC<PropertyFormProps> = ({ onSuccess, currentUser }) =
                     label="صور العقار (تظهر في بطاقة العرض، يمكنك إضافة أكثر من صورة)"
                 >
                     <Upload
+                        multiple
                         listType="picture-card"
                         fileList={imageFiles}
                         beforeUpload={(file) => {
@@ -149,6 +150,7 @@ const PropertyForm: React.FC<PropertyFormProps> = ({ onSuccess, currentUser }) =
                     label="فيديوهات / جولات للعقار (تظهر داخل تفاصيل العرض)"
                 >
                     <Upload
+                        multiple
                         fileList={videoFiles}
                         beforeUpload={(file) => {
                             const uploadFileObj: UploadFile = {
@@ -174,6 +176,7 @@ const PropertyForm: React.FC<PropertyFormProps> = ({ onSuccess, currentUser }) =
                     label="ملفات مرفقة (مثلاً صك PDF، كروكي…، تظهر داخل تفاصيل العرض)"
                 >
                     <Upload
+                        multiple
                         fileList={docFiles}
                         beforeUpload={(file) => {
                             const uploadFileObj: UploadFile = {
