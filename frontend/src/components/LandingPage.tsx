@@ -1,356 +1,318 @@
 import React from 'react';
-import { Button, Card, Tag, Typography } from 'antd';
+import { Button, Card, Collapse, Image, Tag, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import {
-  DatabaseOutlined,
-  GlobalOutlined,
-  LockOutlined,
   ThunderboltOutlined,
-  RocketOutlined,
   AppstoreOutlined,
-  EyeOutlined,
-  PhoneOutlined,
+  TeamOutlined,
+  LinkOutlined,
+  MessageOutlined,
+  BarChartOutlined,
+  WarningOutlined,
+  FolderOpenOutlined,
+  ClockCircleOutlined,
+  UserDeleteOutlined,
+  CheckCircleOutlined,
+  RocketOutlined,
 } from '@ant-design/icons';
 import PlatformLogo from './PlatformLogo';
+import overviewShot from '../assets/landing/overview.png';
+import propertyListShot from '../assets/landing/property-list.png';
+import publicPropertyShot from '../assets/landing/public-property.png';
+import settingsTeamShot from '../assets/landing/settings-team.png';
 
 const { Title, Text, Paragraph } = Typography;
 
-const featureCards = [
+const problemItems = [
+  { icon: WarningOutlined, title: 'فوضى واتساب وإكسل', desc: 'البيانات موزعة بين محادثات وجداول بدون مرجعية واضحة.' },
+  { icon: FolderOpenOutlined, title: 'تشتت الصور والملفات', desc: 'صور العرض والملفات تتبعثر ويصعب الوصول لها وقت العميل.' },
+  { icon: UserDeleteOutlined, title: 'ضياع العملاء والاستفسارات', desc: 'الاستفسارات تضيع بسبب غياب نظام متابعة مركزي.' },
+  { icon: ClockCircleOutlined, title: 'بطء نشر العروض', desc: 'الإدخال اليدوي يستهلك وقت المسوّق ويؤخر الإغلاق.' },
+];
+
+const featureItems = [
+  { icon: ThunderboltOutlined, title: 'إضافة عقار بالذكاء الاصطناعي', desc: 'اكتب وصفًا حرًا بالعربية والنظام يحوله لبيانات عقارية منظمة.' },
+  { icon: AppstoreOutlined, title: 'إدارة العروض من مكان واحد', desc: 'كل عقارات مكتبك في لوحة واحدة مع بحث وتصفية سريعة.' },
+  { icon: TeamOutlined, title: 'إدارة الفريق والصلاحيات', desc: 'أنشئ حسابات موظفين وحدد من يضيف أو يعدّل أو يحذف.' },
+  { icon: LinkOutlined, title: 'روابط عامة احترافية', desc: 'شارك العرض برابط جاهز للعميل مع صفحة منظمة وواضحة.' },
+  { icon: MessageOutlined, title: 'إدارة الاستفسارات', desc: 'استقبل استفسارات العملاء داخل النظام وتابع حالة الرد.' },
+  { icon: BarChartOutlined, title: 'متابعة الأداء والنتائج', desc: 'راقب عدد العروض والمشاهدات والاستفسارات لاتخاذ قرارات أسرع.' },
+];
+
+const pricingPlans = [
   {
-    icon: ThunderboltOutlined,
-    title: 'تحليل ذكي بالعربية',
-    desc: 'اكتب وصفك بأي أسلوب، والنظام يحوّله تلقائيًا إلى عرض عقاري منظم.',
+    key: 'starter',
+    name: 'Starter',
+    price: '99 ر.س',
+    subtitle: 'للمكاتب الصغيرة والبدايات',
+    bullets: ['حتى 3 مستخدمين', 'حتى 100 عرض', 'تجربة مجانية 30 يوم'],
+    highlighted: false,
   },
   {
-    icon: GlobalOutlined,
-    title: 'موقع خاص لمكتبك',
-    desc: 'صفحة عامة احترافية لمكتبك مع مشاركة الروابط للعملاء بسهولة.',
+    key: 'business',
+    name: 'Business',
+    price: '249 ر.س',
+    subtitle: 'الأكثر اختيارًا للمكاتب النشطة',
+    bullets: ['حتى 10 مستخدمين', 'حتى 500 عرض', 'إدارة متقدمة للفريق والعمليات'],
+    highlighted: true,
   },
   {
-    icon: LockOutlined,
-    title: 'إدارة فريق بصلاحيات',
-    desc: 'أنشئ حسابات للموظفين وحدد صلاحيات التعديل والحذف والمشاهدة.',
-  },
-  {
-    icon: DatabaseOutlined,
-    title: 'ملفات وسائط متكاملة',
-    desc: 'ارفع صور وفيديو وملفات وموقع العقار ضمن بطاقة واحدة جاهزة للعرض.',
+    key: 'enterprise',
+    name: 'Enterprise',
+    price: '799 ر.س',
+    subtitle: 'للشركات وإدارة المحافظ الكبيرة',
+    bullets: ['حتى 50 مستخدم', 'حتى 5000 عرض', 'دعم تشغيلي وتوسع أعلى'],
+    highlighted: false,
   },
 ];
 
-const navItems = [
-  { href: '#features', label: 'المميزات', icon: <AppstoreOutlined /> },
-  { href: '#preview', label: 'عرض الشاشة', icon: <EyeOutlined /> },
-  { href: '#contact', label: 'تواصل معنا', icon: <PhoneOutlined /> },
+const faqItems = [
+  { key: '1', label: 'هل يوجد تجربة مجانية؟', children: 'نعم، يمكنك البدء بتجربة مجانية لمدة 30 يوم على الخطة الأولى.' },
+  { key: '2', label: 'هل أحتاج خبرة تقنية لاستخدام عقاري؟', children: 'لا، الواجهة مصممة للمكاتب العقارية مباشرة وبخطوات بسيطة وواضحة.' },
+  { key: '3', label: 'هل يمكن إضافة موظفين بصلاحيات مختلفة؟', children: 'نعم، يمكنك إنشاء فريق عمل وتخصيص صلاحيات كل موظف حسب الدور.' },
+  { key: '4', label: 'هل بياناتي محفوظة؟', children: 'نعم، البيانات مخزنة بشكل مركزي وآمن مع نظام وصول حسب الصلاحيات.' },
 ];
 
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
   const palette = {
-    pageBg:
-      'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)',
-    navBg: '#ffffffcc',
-    navBorder: '1px solid #edf2ff',
-    navBrand: '#0f172a',
-    navText: '#334155',
-    chipBg: 'rgba(255,255,255,0.55)',
-    chipBorder: '1px solid rgba(148, 163, 184, 0.32)',
-    heroBg: 'linear-gradient(140deg, #fbfdf9 0%, #f2f7ef 100%)',
-    heroBorder: '1px solid #e7eefc',
-    heroTitle: '#0f172a',
-    heroBody: '#334155',
-    surface: '#ffffff',
-    surfaceSoft: '#ffffffcc',
-    surfaceBorder: '1px solid #edf2ff',
-    text: '#0f172a',
-    textMuted: '#475569',
+    pageBg: 'linear-gradient(180deg, #f7faf7 0%, #eef3ed 100%)',
+    card: '#ffffff',
+    border: '#e3e9e3',
+    text: '#1f2f24',
+    muted: '#5c6b61',
+    accent: '#2f7a42',
+    accentSoft: '#eef8f0',
   };
-  const iconAccent = '#3f7d3c';
+
+  const sectionTitle = (text: string, sub: string) => (
+    <div style={{ marginBottom: 18 }}>
+      <Title level={2} style={{ margin: 0, color: palette.text }}>{text}</Title>
+      <Paragraph style={{ margin: '8px 0 0', color: palette.muted }}>{sub}</Paragraph>
+    </div>
+  );
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        padding: '20px 14px 36px',
-        direction: 'rtl',
-        background: palette.pageBg,
-      }}
-    >
-      <div style={{ maxWidth: 1120, margin: '0 auto' }}>
+    <div style={{ direction: 'rtl', background: palette.pageBg, minHeight: '100vh', padding: '20px 14px 48px' }}>
+      <div style={{ maxWidth: 1140, margin: '0 auto' }}>
         <Card
-          bordered={false}
-          style={{
-            borderRadius: 16,
-            marginBottom: 16,
-            boxShadow: '0 8px 24px rgba(15,23,42,0.06)',
-            border: palette.navBorder,
-            background: palette.navBg,
-            backdropFilter: 'blur(10px)',
-            WebkitBackdropFilter: 'blur(10px)',
-          }}
-          bodyStyle={{ padding: '10px 16px' }}
+          variant="borderless"
+          style={{ borderRadius: 16, border: `1px solid ${palette.border}`, marginBottom: 18 }}
+          styles={{ body: { padding: '10px 14px' } }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <PlatformLogo width={128} />
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {navItems.map((item) => (
-                <a
-                  key={item.href}
-                  href={item.href}
-                  style={{
-                    color: palette.navText,
-                    fontWeight: 600,
-                    textDecoration: 'none',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    borderRadius: 999,
-                    padding: '6px 12px',
-                    border: palette.chipBorder,
-                    background: palette.chipBg,
-                    backdropFilter: 'blur(10px)',
-                    WebkitBackdropFilter: 'blur(10px)',
-                    boxShadow: '0 6px 14px rgba(15,23,42,0.08)',
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 22,
-                      height: 22,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      borderRadius: '50%',
-                      background: 'linear-gradient(145deg, rgba(30,58,138,0.15), rgba(56,189,248,0.14))',
-                      color: iconAccent,
-                      fontSize: 12,
-                    }}
-                  >
-                    {item.icon}
-                  </span>
-                  {item.label}
-                </a>
-              ))}
-            </div>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+            <PlatformLogo width={120} />
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Button onClick={() => navigate('/auth?mode=login')}>تسجيل دخول</Button>
-              <Button type="primary" onClick={() => navigate('/auth?mode=register')}>
-                إنشاء حساب
-              </Button>
+              <a href="#features" style={{ color: palette.muted, textDecoration: 'none', fontWeight: 600 }}>المميزات</a>
+              <a href="#pricing" style={{ color: palette.muted, textDecoration: 'none', fontWeight: 600 }}>الخطط</a>
+              <a href="#faq" style={{ color: palette.muted, textDecoration: 'none', fontWeight: 600 }}>الأسئلة الشائعة</a>
             </div>
-          </div>
-        </Card>
-
-        <div
-          style={{
-            borderRadius: 26,
-            padding: '28px 22px',
-            background: palette.heroBg,
-            color: palette.heroTitle,
-            boxShadow: '0 20px 54px rgba(15,23,42,0.08)',
-            border: palette.heroBorder,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))',
-            gap: 20,
-          }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Tag color="blue" style={{ borderRadius: 999, marginBottom: 14 }}>
-              منصة عقارية ذكية للمكاتب والشركات
-            </Tag>
-            <Title level={1} style={{ color: palette.heroTitle, margin: 0, lineHeight: 1.35 }}>
-              أدر عقارات مكتبك بذكاء
-              <br />
-              اكتب الوصف والباقي علينا
-            </Title>
-            <Paragraph style={{ color: palette.heroBody, marginTop: 2, marginBottom: 6, fontSize: 17, lineHeight: 1.9 }}>
-              منصة احترافية للمكاتب والشركات العقارية: إدخال سريع، تحليل ذكي بالعربية،
-              ومشاركة عروض جاهزة خلال ثواني.
-            </Paragraph>
-
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 12 }}>
-              <Tag style={{ borderRadius: 999, padding: '5px 12px', marginInlineEnd: 0 }}>واجهة احترافية</Tag>
-              <Tag style={{ borderRadius: 999, padding: '5px 12px', marginInlineEnd: 0 }}>تحليل ذكي بالعربية</Tag>
-              <Tag style={{ borderRadius: 999, padding: '5px 12px', marginInlineEnd: 0 }}>مشاركة فورية</Tag>
-            </div>
-
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 18 }}>
-              <Button
-                type="primary"
-                size="large"
-                icon={<RocketOutlined />}
-                onClick={() => navigate('/auth?mode=register')}
-                style={{ minWidth: 235, fontWeight: 700, height: 48, background: '#3f7d3c' }}
-              >
-                ابدأ تجربتك الآن / إنشاء حساب
-              </Button>
-              <Button
-                size="large"
-                onClick={() => navigate('/auth?mode=login')}
-                style={{ minWidth: 160, fontWeight: 700, height: 48 }}
-              >
-                تسجيل دخول
-              </Button>
-            </div>
-          </div>
-
-          <Card
-            bordered={false}
-            style={{
-              borderRadius: 18,
-              background: palette.surface,
-              boxShadow: '0 16px 36px rgba(2,6,23,0.12)',
-            }}
-            bodyStyle={{ padding: 16 }}
-          >
-            <div style={{ marginBottom: 10 }}>
-              <Text style={{ color: palette.textMuted }}>نموذج لوحة التحكم</Text>
-              <Title level={4} style={{ marginTop: 4, marginBottom: 0, color: palette.text }}>
-                شاشة إدارة عروض مدعومة بالذكاء الاصطناعي
-              </Title>
-            </div>
-            <div
-              style={{
-                borderRadius: 14,
-                border: '1px solid #dbe7ff',
-                padding: 12,
-                background: 'linear-gradient(160deg, #f8fbff 0%, #ffffff 100%)',
-              }}
-            >
-              <Card
-                size="small"
-                style={{
-                  borderRadius: 12,
-                  marginBottom: 10,
-                  transform: 'perspective(900px) rotateY(-8deg) rotateX(4deg)',
-                  boxShadow: '0 14px 28px rgba(30,58,138,0.18)',
-                }}
-              >
-                <Text strong>النص المدخل:</Text>
-                <Paragraph style={{ marginBottom: 0 }}>
-                  "فيلا في شمال جدة، 540م، السعر أقل من 2.8 مليون..."
-                </Paragraph>
-              </Card>
-              <Card
-                size="small"
-                style={{
-                  borderRadius: 12,
-                  transform: 'perspective(900px) rotateY(-3deg)',
-                  border: '1px solid #e2e8f0',
-                }}
-              >
-                <Text strong>النتيجة:</Text>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
-                  <Tag>المدينة: جدة</Tag>
-                  <Tag>النوع: فيلا</Tag>
-                  <Tag>المساحة: 540 م²</Tag>
-                  <Tag>السعر: 2,800,000</Tag>
-                </div>
-              </Card>
-            </div>
-          </Card>
-        </div>
-
-        <Card
-          bordered={false}
-          style={{
-            marginTop: 16,
-            borderRadius: 14,
-            background: palette.surfaceSoft,
-            border: palette.surfaceBorder,
-          }}
-          bodyStyle={{ padding: '10px 16px' }}
-        >
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, justifyContent: 'space-between' }}>
-            <Text style={{ color: palette.textMuted }}>موثوق من فرق مبيعات ومكاتب عقارية</Text>
-            <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', opacity: 0.58 }}>
-              <Text strong style={{ color: palette.text }}>ألفا العقارية</Text>
-              <Text strong style={{ color: palette.text }}>أوربن بروبرتي</Text>
-              <Text strong style={{ color: palette.text }}>بيت هَب</Text>
-              <Text strong style={{ color: palette.text }}>نقلة العقار</Text>
-            </div>
-          </div>
-        </Card>
-
-        <div
-          id="features"
-          style={{
-            marginTop: 18,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: 12,
-          }}
-        >
-          {featureCards.map((item) => (
-            <Card
-              key={item.title}
-              bordered={false}
-              style={{
-                borderRadius: 16,
-                boxShadow: '0 12px 26px rgba(15,23,42,0.06)',
-                height: '100%',
-                border: palette.surfaceBorder,
-                background: palette.surface,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                <item.icon style={{ fontSize: 22, color: iconAccent }} />
-                <Text strong style={{ fontSize: 18, color: palette.text }}>
-                  {item.title}
-                </Text>
-              </div>
-              <Text style={{ color: palette.textMuted }}>{item.desc}</Text>
-            </Card>
-          ))}
-        </div>
-
-        <div id="preview" style={{ marginTop: 22 }}>
-          <Card
-            bordered={false}
-            style={{ borderRadius: 18, boxShadow: '0 14px 30px rgba(15,23,42,0.07)', border: palette.surfaceBorder, background: palette.surface }}
-          >
-            <Title level={3} style={{ marginTop: 0, color: palette.text }}>
-              شاهد كيف يتحول النص إلى عرض جاهز
-            </Title>
-            <Paragraph style={{ color: palette.textMuted }}>
-              هذا القسم يمثل معاينة لرحلة المستخدم من إدخال نص عقاري إلى بطاقة منظمة قابلة للنشر.
-            </Paragraph>
-            <div
-              style={{
-                borderRadius: 14,
-                padding: 14,
-                background: 'linear-gradient(140deg, #0f172a 0%, #1e293b 60%, #0f172a 100%)',
-                color: '#fff',
-              }}
-            >
-              <Text style={{ color: '#cbd5e1' }}>مراحل المعالجة بالذكاء الاصطناعي</Text>
-              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-                <Card size="small" style={{ borderRadius: 10 }}><Text strong>1) إدخال النص</Text></Card>
-                <Card size="small" style={{ borderRadius: 10 }}><Text strong>2) التحليل الذكي</Text></Card>
-                <Card size="small" style={{ borderRadius: 10 }}><Text strong>3) استخراج الحقول</Text></Card>
-                <Card size="small" style={{ borderRadius: 10 }}><Text strong>4) بطاقة جاهزة</Text></Card>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        <Card
-          id="contact"
-          bordered={false}
-          style={{ marginTop: 18, borderRadius: 14, border: palette.surfaceBorder, boxShadow: '0 8px 20px rgba(15,23,42,0.05)', background: palette.surfaceSoft }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-            <div>
-              <Text strong style={{ fontSize: 16, color: palette.text }}>جاهز ترفع مستوى مكتبك؟</Text>
-              <br />
-              <Text style={{ color: palette.textMuted }}>تواصل معنا أو ابدأ التجربة الآن خلال دقيقة.</Text>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8 }}>
               <Button onClick={() => navigate('/auth?mode=login')}>تسجيل الدخول</Button>
-              <Button type="primary" onClick={() => navigate('/auth?mode=register')}>إنشاء حساب</Button>
+              <Button type="primary" onClick={() => navigate('/auth?mode=register')} style={{ background: palette.accent }}>
+                ابدأ مجانًا
+              </Button>
             </div>
+          </div>
+        </Card>
+
+        <Card
+          variant="borderless"
+          style={{ borderRadius: 24, border: `1px solid ${palette.border}` }}
+          styles={{ body: { padding: 24 } }}
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 22 }}>
+            <div>
+              <Tag color="green" style={{ borderRadius: 999, paddingInline: 12, marginBottom: 14 }}>
+                منصة مصممة خصيصًا للسوق العقاري السعودي
+              </Tag>
+              <Title level={1} style={{ margin: 0, color: palette.text, lineHeight: 1.35 }}>
+                أدر مكتبك العقاري بذكاء...
+                <br />
+                وحوّل الفوضى إلى مبيعات
+              </Title>
+              <Paragraph style={{ color: palette.muted, fontSize: 17, marginTop: 12, marginBottom: 18, lineHeight: 1.9 }}>
+                عقاري يجمع عروضك، فريقك، واستفسارات عملائك في نظام واحد. أضف العقار بنص عربي حر،
+                وسيحوّله الذكاء الاصطناعي إلى عرض جاهز للمشاركة خلال دقائق.
+              </Paragraph>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <Button
+                  type="primary"
+                  size="large"
+                  icon={<RocketOutlined />}
+                  style={{ minWidth: 200, height: 48, fontWeight: 700, background: palette.accent }}
+                  onClick={() => navigate('/auth?mode=register')}
+                >
+                  ابدأ تجربتك المجانية 30 يوم
+                </Button>
+                <Button
+                  size="large"
+                  style={{ minWidth: 170, height: 48, fontWeight: 700 }}
+                  onClick={() => navigate('/auth?mode=login')}
+                >
+                  احجز عرض توضيحي
+                </Button>
+              </div>
+            </div>
+
+            <Card
+              variant="borderless"
+              style={{ borderRadius: 16, border: `1px solid ${palette.border}`, background: '#fbfefb' }}
+              styles={{ body: { padding: 14 } }}
+            >
+              <Text style={{ color: palette.muted }}>واجهة النظام</Text>
+              <Title level={4} style={{ marginTop: 6, color: palette.text }}>لوحة تحكم عقاري (Mockup)</Title>
+              <div style={{ borderRadius: 12, border: `1px solid ${palette.border}`, overflow: 'hidden', marginTop: 10, position: 'relative' }}>
+                <Image
+                  src={overviewShot}
+                  alt="لقطة من لوحة التحكم"
+                  preview={{ mask: 'اضغط للتكبير' }}
+                  style={{ width: '100%', display: 'block', objectFit: 'cover', maxHeight: 290 }}
+                />
+                <Tag color="green" style={{ position: 'absolute', top: 10, right: 10, borderRadius: 999, margin: 0 }}>
+                  أحدث العروض والاستفسارات
+                </Tag>
+              </div>
+            </Card>
+          </div>
+        </Card>
+
+        <div style={{ marginTop: 26 }}>
+          {sectionTitle('المشكلة التي نحلها في السوق', 'أغلب المكاتب العقارية تعاني من نفس الفوضى التشغيلية يوميًا.')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 12 }}>
+            {problemItems.map((item) => (
+              <Card key={item.title} variant="borderless" style={{ border: `1px solid ${palette.border}`, borderRadius: 14 }}>
+                <item.icon style={{ fontSize: 22, color: '#bf9b30' }} />
+                <Title level={5} style={{ margin: '10px 0 6px', color: palette.text }}>{item.title}</Title>
+                <Text style={{ color: palette.muted }}>{item.desc}</Text>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        <div id="features" style={{ marginTop: 28 }}>
+          {sectionTitle('مميزات عقاري للمكاتب والمسوقين', 'كل أداة تحتاجها لإدارة عملياتك العقارية من أول إدخال العرض حتى متابعة العميل.')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12 }}>
+            {featureItems.map((item) => (
+              <Card key={item.title} variant="borderless" style={{ border: `1px solid ${palette.border}`, borderRadius: 14 }}>
+                <item.icon style={{ fontSize: 22, color: palette.accent }} />
+                <Title level={5} style={{ margin: '10px 0 6px', color: palette.text }}>{item.title}</Title>
+                <Text style={{ color: palette.muted }}>{item.desc}</Text>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 28 }}>
+          {sectionTitle('كيف يعمل النظام؟', '3 خطوات بسيطة لتحويل العرض إلى فرصة بيع فعلية.')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            {[
+              'أضف وصف العقار بالعربية كما هو',
+              'الذكاء الاصطناعي يحلل البيانات وينظمها',
+              'انشر الرابط وابدأ استقبال الاستفسارات',
+            ].map((step, i) => (
+              <Card key={step} variant="borderless" style={{ borderRadius: 14, border: `1px solid ${palette.border}` }}>
+                <Tag color="green" style={{ borderRadius: 999 }}>الخطوة {i + 1}</Tag>
+                <Paragraph style={{ margin: '10px 0 0', color: palette.text, fontWeight: 600 }}>{step}</Paragraph>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 28 }}>
+          {sectionTitle('لقطات من النظام', 'نماذج للشاشات الأساسية التي يستخدمها فريقك يوميًا.')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12 }}>
+            {[
+              { label: 'لوحة التحكم', image: overviewShot },
+              { label: 'قائمة العقارات', image: propertyListShot },
+              { label: 'صفحة العرض العامة', image: publicPropertyShot },
+              { label: 'الإعدادات والفريق', image: settingsTeamShot },
+            ].map((item) => (
+              <Card key={item.label} variant="borderless" style={{ borderRadius: 14, border: `1px solid ${palette.border}` }} styles={{ body: { padding: 10 } }}>
+                <div style={{ borderRadius: 10, overflow: 'hidden', border: `1px solid ${palette.border}` }}>
+                  <Image
+                    src={item.image}
+                    alt={item.label}
+                    preview={{ mask: 'اضغط للتكبير' }}
+                    style={{ width: '100%', height: 180, objectFit: 'cover', display: 'block' }}
+                  />
+                </div>
+                <Text strong style={{ color: palette.text, marginTop: 8, display: 'block' }}>{item.label}</Text>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        <div id="pricing" style={{ marginTop: 28 }}>
+          {sectionTitle('خطط واضحة تناسب حجم مكتبك', 'ابدأ بالخطة المناسبة اليوم، وارتقِ وقتما احتجت.')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12 }}>
+            {pricingPlans.map((plan) => (
+              <Card
+                key={plan.key}
+                variant="borderless"
+                style={{
+                  borderRadius: 14,
+                  border: `1px solid ${plan.highlighted ? palette.accent : palette.border}`,
+                  boxShadow: plan.highlighted ? '0 14px 30px rgba(47,122,66,0.18)' : undefined,
+                  background: plan.highlighted ? palette.accentSoft : '#fff',
+                }}
+              >
+                {plan.highlighted && <Tag color="green">الأكثر اختيارًا</Tag>}
+                <Title level={4} style={{ marginTop: 8, color: palette.text }}>{plan.name}</Title>
+                <Title level={2} style={{ margin: '4px 0', color: palette.text }}>{plan.price}<Text style={{ color: palette.muted }}> / شهريًا</Text></Title>
+                <Paragraph style={{ color: palette.muted }}>{plan.subtitle}</Paragraph>
+                <div style={{ display: 'grid', gap: 6, marginBottom: 14 }}>
+                  {plan.bullets.map((b) => (
+                    <Text key={b} style={{ color: palette.text }}>
+                      <CheckCircleOutlined style={{ color: palette.accent, marginLeft: 6 }} />
+                      {b}
+                    </Text>
+                  ))}
+                </div>
+                <Button
+                  block
+                  type={plan.highlighted ? 'primary' : 'default'}
+                  style={plan.highlighted ? { background: palette.accent } : undefined}
+                  onClick={() => navigate('/auth?mode=register')}
+                >
+                  ابدأ مجانًا
+                </Button>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        <div id="faq" style={{ marginTop: 28 }}>
+          {sectionTitle('الأسئلة الشائعة', 'إجابات سريعة قبل أن تبدأ.')}
+          <Collapse items={faqItems} />
+        </div>
+
+        <Card
+          variant="borderless"
+          style={{ marginTop: 28, borderRadius: 18, border: `1px solid ${palette.border}`, background: `linear-gradient(135deg, ${palette.accentSoft}, #ffffff)` }}
+        >
+          <Title level={2} style={{ marginTop: 0, color: palette.text }}>
+            ابدأ اليوم... وخلي إدارة مكتبك العقاري أكثر احترافية وربحية
+          </Title>
+          <Paragraph style={{ color: palette.muted, fontSize: 16 }}>
+            جرّب عقاري لمدة 30 يوم مجانًا، واكتشف كيف تقلل الوقت التشغيلي وتزيد سرعة إغلاق الصفقات.
+          </Paragraph>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            <Button
+              type="primary"
+              size="large"
+              style={{ minWidth: 240, height: 48, fontWeight: 700, background: palette.accent }}
+              onClick={() => navigate('/auth?mode=register')}
+            >
+              ابدأ تجربتك المجانية الآن
+            </Button>
+            <Button
+              size="large"
+              style={{ minWidth: 170, height: 48, fontWeight: 700 }}
+              onClick={() => navigate('/auth?mode=login')}
+            >
+              احجز عرض توضيحي
+            </Button>
           </div>
         </Card>
       </div>
