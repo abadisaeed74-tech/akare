@@ -557,6 +557,7 @@ async def upload_file(
             detail="لا يمكنك رفع ملفات ومرفقات قبل الاشتراك في إحدى الخطط. يرجى ترقية الحساب من صفحة الإعدادات.",
         )
     original_name = file.filename or "file"
+    lower_name = original_name.lower()
     # Avoid collisions by prefixing with timestamp
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     safe_name = "".join(c for c in original_name if c.isalnum() or c in {".", "_", "-"}) or "file"
@@ -568,9 +569,12 @@ async def upload_file(
 
     if CLOUDINARY_ENABLED:
         try:
+            # Cloudinary free plans often block PDF delivery when uploaded as image.
+            # Force PDFs to raw so they can be opened/downloaded correctly.
+            cloud_resource_type = "raw" if lower_name.endswith(".pdf") else "auto"
             result = cloudinary.uploader.upload(
                 content,
-                resource_type="auto",
+                resource_type=cloud_resource_type,
                 folder=CLOUDINARY_FOLDER,
                 public_id=filename,
                 overwrite=False,
