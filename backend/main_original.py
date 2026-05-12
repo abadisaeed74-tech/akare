@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, Header, Response
+from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
@@ -41,20 +41,8 @@ from models import (
     PropertyInquiryPublic,
     PropertyInquiryStatusUpdate,
     DashboardOverview,
-    ClientRequestInput,
-    ClientRequestPublic,
-    ClientRequestUpdate,
-    ClientNoteInput,
-    ClientNotePublic,
-    ClientNoteUpdate,
-    ClientOfferInput,
-    ClientOfferPublic,
-    ClientOfferUpdate,
-    ClientProfileInput,
-    ClientProfilePublic,
-    ClientProfileUpdate,
 )
-from ai_processor import process_real_estate_text, process_client_request_text
+from ai_processor import process_real_estate_text
 from database import (
     add_property,
     get_properties,
@@ -95,32 +83,6 @@ from database import (
     count_owner_inquiries_db,
     count_owner_total_views_db,
     update_property_inquiry_status_db,
-    create_client_request_db,
-    get_client_requests_db,
-    update_client_request_db,
-    get_client_request_by_id_db,
-    delete_client_request_db,
-    create_client_note_db,
-    get_client_notes_db,
-    update_client_note_db,
-    delete_client_note_db,
-    create_client_offer_db,
-    get_client_offers_db,
-    get_client_offers_by_client_db,
-    get_client_offer_by_id_db,
-    update_client_offer_db,
-    delete_client_offer_db,
-    create_client_offer_note_db,
-    get_client_offer_notes_db,
-    update_client_offer_note_db,
-    delete_client_offer_note_db,
-    create_client_profile_db,
-    get_client_profiles_db,
-    get_client_profile_by_id_db,
-    update_client_profile_db,
-    delete_client_profile_db,
-    get_or_create_client_profile_with_type_db,
-    get_client_profiles_by_type_db,
 )
 
 
@@ -265,9 +227,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def require_permission(user: UserPublic, permission: str) -> None:
     """
     Ensure that the current user has a given permission.
-    Owners and managers always have all operational permissions.
+    Owners always have all permissions.
     """
-    if user.role in {"owner", "manager"}:
+    if user.role == "owner":
         return
     perms = user.permissions or {}
     has_perm = bool(perms.get(permission))
@@ -306,22 +268,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserPublic:
     return UserPublic(**user_data)
 
 # Configure CORS
-CORS_ORIGINS = {
-    FRONTEND_BASE_URL,
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-}
-CORS_ORIGINS.update(
-    origin.strip().rstrip("/")
-    for origin in os.getenv("CORS_ORIGINS", "").split(",")
-    if origin.strip()
-)
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=sorted(CORS_ORIGINS),
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1148,12 +1097,9 @@ async def list_team_users(current_user: UserPublic = Depends(get_current_user)):
     """
     List all users (owner + employees) that belong to the current company.
     """
-    if current_user.role not in {"owner", "manager"}:
+    if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه إدارة المستخدمين.")
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-    raw_team = await get_team_for_owner(owner_id)
+    raw_team = await get_team_for_owner(current_user.id)
     team: List[TeamUserPublic] = []
     for u in raw_team:
         team.append(
@@ -1162,7 +1108,6 @@ async def list_team_users(current_user: UserPublic = Depends(get_current_user)):
                 email=u["email"],
                 role=u.get("role", "owner"),
                 status=u.get("status", "active"),
-                display_name=u.get("display_name"),
                 permissions=u.get("permissions") or {},
             )
         )
@@ -1206,7 +1151,7 @@ async def create_team_user(
     if len(data.password.encode("utf-8")) > 72:
         raise HTTPException(
             status_code=400,
-detail="كلمة المرور طويلة جداً، الرجاء استخدام كلمة مرور أقصر (أقل من 72 حرف/بايت).",
+            detail="كلمة المرور طويلة جداً، الرجاء استخدام كلمة مرور أقصر (أقل من 72 حرف/بايت).",
         )
 
     hashed = get_password_hash(data.password)
@@ -1215,15 +1160,12 @@ detail="كلمة المرور طويلة جداً، الرجاء استخدام 
         email=data.email,
         password_hash=hashed,
         permissions=data.permissions,
-        display_name=data.display_name,
-        role=data.role,
     )
     return TeamUserPublic(
         id=employee["id"],
         email=employee["email"],
         role=employee.get("role", "employee"),
         status=employee.get("status", "active"),
-        display_name=employee.get("display_name"),
         permissions=employee.get("permissions") or {},
     )
 
@@ -1247,17 +1189,6 @@ async def update_team_user(
         updates["status"] = data.status
     if data.permissions is not None:
         updates["permissions"] = data.permissions
-    if data.display_name is not None:
-        updates["display_name"] = data.display_name
-    if data.role is not None:
-        updates["role"] = data.role
-        if data.role == "manager":
-            updates["permissions"] = {
-                "can_add_property": True,
-                "can_edit_property": True,
-                "can_delete_property": True,
-                "can_manage_files": True,
-            }
 
     updated = await update_employee_user(current_user.id, user_id, updates)
     if not updated:
@@ -1268,32 +1199,19 @@ async def update_team_user(
         email=updated["email"],
         role=updated.get("role", "employee"),
         status=updated.get("status", "active"),
-        display_name=updated.get("display_name"),
         permissions=updated.get("permissions") or {},
     )
 
 
 @app.get("/public/properties/{property_id}", response_model=Property)
-async def get_public_property(property_id: str, request: Request, response: Response):
+async def get_public_property(property_id: str):
     """
     Public read-only endpoint to view a single property by ID.
     No authentication required, used for share links.
     """
-    cookie_name = f"viewed_property_{re.sub(r'[^A-Za-z0-9_-]', '_', property_id)}"
-    has_recent_view = request.cookies.get(cookie_name) == "1"
-    prop = await get_property_by_id(property_id) if has_recent_view else await increment_property_view_count(property_id)
+    prop = await increment_property_view_count(property_id)
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if not has_recent_view:
-        response.set_cookie(
-            key=cookie_name,
-            value="1",
-            max_age=60 * 60 * 24,
-            httponly=True,
-            samesite="none" if FRONTEND_BASE_URL.startswith("https://") else "lax",
-            secure=FRONTEND_BASE_URL.startswith("https://"),
-            path="/",
-        )
     return prop
 
 
@@ -1367,763 +1285,6 @@ async def update_dashboard_inquiry_status(
     if not updated:
         raise HTTPException(status_code=404, detail="الاستفسار غير موجود.")
     return PropertyInquiryPublic(**updated)
-
-
-# ===== Clients / CRM endpoints =====
-
-@app.get("/appointments/placeholder")
-async def list_appointments_placeholder(current_user: UserPublic = Depends(get_current_user)):
-    """
-    Placeholder endpoint for upcoming appointments module.
-    Keeps frontend integration stable until full appointments model is implemented.
-    """
-    _ = current_user
-    return []
-
-
-@app.get("/appointments")
-async def list_appointments(
-    date_filter: Optional[str] = Query(None, description="today | this_week | delayed"),
-    employee_id: Optional[str] = Query(None),
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-
-    def _client_key(name: Optional[str], phone: Optional[str]) -> str:
-        return f"{(name or 'غير محدد').strip()}|{(phone or '').strip()}"
-
-    def _to_dt(value):
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str) and value.strip():
-            try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-            except Exception:
-                return None
-        return None
-
-    def _format_number(value: object) -> Optional[str]:
-        if value in (None, "", "غير مذكور"):
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return str(value).strip() or None
-        if number.is_integer():
-            return f"{int(number):,}"
-        return f"{number:,.2f}".rstrip("0").rstrip(".")
-
-    def _build_offer_title(prop: Optional[Dict[str, object]]) -> str:
-        if not prop:
-            return "عرض غير مرتبط بعقار"
-
-        parts = [
-            str(prop.get("property_type") or "عقار").strip(),
-            str(prop.get("neighborhood") or "").strip(),
-            str(prop.get("city") or "").strip(),
-        ]
-        title = " - ".join(part for part in parts if part and part != "غير مذكور")
-
-        details: List[str] = []
-        area = _format_number(prop.get("area"))
-        price = _format_number(prop.get("price"))
-        if area:
-            details.append(f"{area}م²")
-        if price:
-            details.append(f"{price} ر.س")
-
-        if details:
-            return f"{title or 'عقار'} ({'، '.join(details)})"
-        return title or "عقار"
-
-    profiles = await get_client_profiles_db(owner_id)
-    assigned_map: Dict[str, Dict[str, Optional[str]]] = {}
-    for profile in profiles:
-        assigned_map[_client_key(profile.get("client_name"), profile.get("phone_number"))] = {
-            "id": profile.get("assigned_user_id"),
-            "name": profile.get("assigned_user_name"),
-        }
-
-    requests = await get_client_requests_db(owner_id, limit=500)
-    offers = await get_client_offers_db(owner_id, limit=500)
-    property_title_cache: Dict[str, str] = {}
-
-    now = datetime.utcnow()
-    rows: List[Dict[str, object]] = []
-
-    for req in requests:
-        deadline = _to_dt(req.get("deadline_at"))
-        if not deadline:
-            continue
-        ck = _client_key(req.get("client_name"), req.get("phone_number"))
-        assigned_user = assigned_map.get(ck, {})
-        assigned_user_id = assigned_user.get("id")
-        assigned_user_name = assigned_user.get("name")
-
-        if current_user.role == "employee" and assigned_user_id and assigned_user_id != current_user.id:
-            continue
-        if current_user.role == "employee" and assigned_user_id is None:
-            continue
-        if current_user.role in ("owner", "manager") and employee_id and assigned_user_id != employee_id:
-            continue
-
-        if date_filter == "today" and deadline.date() != now.date():
-            continue
-        if date_filter == "this_week":
-            week_start = now - timedelta(days=now.weekday())
-            week_end = week_start + timedelta(days=7)
-            if not (week_start.date() <= deadline.date() < week_end.date()):
-                continue
-        if date_filter == "delayed" and deadline >= now:
-            continue
-
-        rows.append({
-            "id": req.get("id"),
-            "type": "request",
-            "client_name": req.get("client_name"),
-            "phone_number": req.get("phone_number"),
-            "property_type": req.get("property_type"),
-            "city": req.get("city"),
-            "neighborhood": (req.get("neighborhoods") or [None])[0],
-            "property_id": None,
-            "reminder_type": req.get("reminder_type"),
-            "deadline_at": req.get("deadline_at"),
-            "reminder_before_minutes": req.get("reminder_before_minutes"),
-            "follow_up_details": req.get("follow_up_details"),
-            "status": req.get("status", "new"),
-            "created_at": req.get("created_at"),
-            "source_id": req.get("id"),
-            "source_type": "request",
-            "client_key": ck,
-            "title": f"{req.get('property_type', 'طلب')} - {req.get('city', 'غير محدد')}",
-            "assigned_user_id": assigned_user_id if current_user.role in ("owner", "manager") else None,
-            "assigned_user_name": assigned_user_name if current_user.role in ("owner", "manager") else None,
-        })
-
-    for offer in offers:
-        deadline = _to_dt(offer.get("deadline_at"))
-        if not deadline:
-            continue
-        property_id = str(offer.get("property_id") or "").strip()
-        offer_title = property_title_cache.get(property_id)
-        if offer_title is None:
-            prop = await get_property_by_id(property_id) if property_id else None
-            if prop and prop.get("owner_id") != owner_id:
-                prop = None
-            offer_title = _build_offer_title(prop)
-            if property_id:
-                property_title_cache[property_id] = offer_title
-        ck = _client_key(offer.get("client_name"), offer.get("phone_number"))
-        assigned_user = assigned_map.get(ck, {})
-        assigned_user_id = assigned_user.get("id")
-        assigned_user_name = assigned_user.get("name")
-
-        if current_user.role == "employee" and assigned_user_id and assigned_user_id != current_user.id:
-            continue
-        if current_user.role == "employee" and assigned_user_id is None:
-            continue
-        if current_user.role in ("owner", "manager") and employee_id and assigned_user_id != employee_id:
-            continue
-
-        if date_filter == "today" and deadline.date() != now.date():
-            continue
-        if date_filter == "this_week":
-            week_start = now - timedelta(days=now.weekday())
-            week_end = week_start + timedelta(days=7)
-            if not (week_start.date() <= deadline.date() < week_end.date()):
-                continue
-        if date_filter == "delayed" and deadline >= now:
-            continue
-
-        rows.append({
-            "id": offer.get("id"),
-            "type": "offer",
-            "client_name": offer.get("client_name"),
-            "phone_number": offer.get("phone_number"),
-            "property_type": None,
-            "city": None,
-            "neighborhood": None,
-            "property_id": offer.get("property_id"),
-            "reminder_type": offer.get("reminder_type"),
-            "deadline_at": offer.get("deadline_at"),
-            "reminder_before_minutes": offer.get("reminder_before_minutes"),
-            "follow_up_details": offer.get("follow_up_details"),
-            "status": offer.get("status", "new"),
-            "created_at": offer.get("created_at"),
-            "source_id": offer.get("id"),
-            "source_type": "offer",
-            "client_key": ck,
-            "title": offer_title,
-            "assigned_user_id": assigned_user_id if current_user.role in ("owner", "manager") else None,
-            "assigned_user_name": assigned_user_name if current_user.role in ("owner", "manager") else None,
-        })
-
-    rows.sort(key=lambda x: _to_dt(x.get("deadline_at")) or now)
-    return rows
-
-
-@app.post("/clients", response_model=ClientRequestPublic, status_code=201)
-async def create_client_request_endpoint(
-    payload: ClientRequestInput,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    text = (payload.raw_text or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="نص الطلب مطلوب.")
-
-    processed = process_client_request_text(text, api_key=None)
-    if not processed or "error" in processed:
-        details = str((processed or {}).get("details", ""))
-        raise HTTPException(status_code=422, detail=f"تعذر تحليل الطلب: {details or 'خطأ غير متوقع'}")
-
-    neighborhoods = processed.get("neighborhoods")
-    if not isinstance(neighborhoods, list):
-        neighborhoods = []
-    neighborhoods = [str(n).strip() for n in neighborhoods if str(n).strip()]
-
-    def _to_int_or_none(v):
-        if v in (None, ""):
-            return None
-        try:
-            return int(float(v))
-        except Exception:
-            return None
-
-    doc = {
-        "raw_text": text,
-        "client_name": str(processed.get("client_name") or "غير محدد").strip() or "غير محدد",
-        "phone_number": str(processed.get("phone_number")).strip() if processed.get("phone_number") else None,
-        "property_type": str(processed.get("property_type") or "غير محدد").strip() or "غير محدد",
-        "city": normalize_city(str(processed.get("city") or "غير محدد").strip() or "غير محدد"),
-        "neighborhoods": neighborhoods,
-        "budget_min": _to_int_or_none(processed.get("budget_min")),
-        "budget_max": _to_int_or_none(processed.get("budget_max")),
-        "area_min": _to_int_or_none(processed.get("area_min")),
-        "area_max": _to_int_or_none(processed.get("area_max")),
-        "additional_requirements": str(processed.get("additional_requirements") or "").strip(),
-        "action_plan": str(processed.get("suggested_action_plan") or "").strip(),
-        "follow_up_details": payload.follow_up_details,
-        "status": "new",
-    }
-    created = await create_client_request_db(owner_id, doc)
-    return ClientRequestPublic(**created)
-
-
-@app.get("/clients", response_model=List[ClientRequestPublic])
-async def list_client_requests_endpoint(current_user: UserPublic = Depends(get_current_user)):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-    rows = await get_client_requests_db(owner_id, limit=500)
-    return [ClientRequestPublic(**r) for r in rows]
-
-
-@app.get("/clients/{request_id}/matches", response_model=List[Property])
-async def get_client_request_matches(
-    request_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="الطلب غير موجود.")
-
-    city = normalize_city((request_item.get("city") or "").strip())
-    property_type = (request_item.get("property_type") or "").strip()
-    neighborhoods = [normalize_neighborhood(n) for n in (request_item.get("neighborhoods") or []) if n]
-    budget_min = request_item.get("budget_min")
-    budget_max = request_item.get("budget_max")
-    area_min = request_item.get("area_min")
-    area_max = request_item.get("area_max")
-
-    def clean_text(value: Optional[str]) -> str:
-        if not value:
-            return ""
-        text = str(value).strip().lower()
-        text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
-        return re.sub(r"\s+", " ", text)
-
-    def property_type_matches(prop_type: str, wanted_type: str) -> bool:
-        prop = clean_text(prop_type)
-        wanted = clean_text(wanted_type)
-        if not wanted or wanted == clean_text("غير محدد"):
-            return False
-        type_tokens = ("ارض", "فيلا", "شقه", "عماره", "دوبلكس", "استراحه", "مكتب", "محل", "تاون هاوس", "townhouse")
-        wanted_tokens = [token for token in type_tokens if token in wanted]
-        if wanted_tokens:
-            return any(token in prop for token in wanted_tokens)
-        return wanted in prop or prop in wanted
-
-    def in_range(value, min_value, max_value, tolerance: float = 0.15) -> bool:
-        if not isinstance(value, (int, float)):
-            return False
-        low = float(min_value) * (1 - tolerance) if isinstance(min_value, (int, float)) and min_value > 0 else None
-        high = float(max_value) * (1 + tolerance) if isinstance(max_value, (int, float)) and max_value > 0 else None
-        if low is not None and float(value) < low:
-            return False
-        if high is not None and float(value) > high:
-            return False
-        return low is not None or high is not None
-
-    wanted_city = clean_text(city)
-    wanted_neighborhoods = [clean_text(n) for n in neighborhoods if n]
-    all_properties = await get_properties({"owner_id": owner_id}, limit=500)
-    scored_matches = []
-
-    for prop in all_properties:
-        score = 0
-        reasons = 0
-        prop_city = clean_text(normalize_city(prop.get("city")))
-        prop_neighborhood = clean_text(normalize_neighborhood(prop.get("neighborhood")))
-
-        if wanted_city and wanted_city != clean_text("غير محدد"):
-            if prop_city == wanted_city:
-                score += 40
-                reasons += 1
-            else:
-                score -= 35
-
-        if property_type_matches(prop.get("property_type", ""), property_type):
-            score += 35
-            reasons += 1
-        elif property_type and clean_text(property_type) != clean_text("غير محدد"):
-            score -= 20
-
-        if wanted_neighborhoods:
-            if prop_neighborhood in wanted_neighborhoods:
-                score += 30
-                reasons += 1
-            elif any(n in prop_neighborhood or prop_neighborhood in n for n in wanted_neighborhoods):
-                score += 18
-                reasons += 1
-
-        if in_range(prop.get("price"), budget_min, budget_max):
-            score += 20
-            reasons += 1
-        elif isinstance(budget_min, (int, float)) or isinstance(budget_max, (int, float)):
-            score -= 8
-
-        if in_range(prop.get("area"), area_min, area_max, tolerance=0.2):
-            score += 10
-            reasons += 1
-
-        if reasons > 0 and score > 0:
-            if score >= 95:
-                prop["match_level"] = 1
-            elif score >= 65:
-                prop["match_level"] = 2
-            elif score >= 35:
-                prop["match_level"] = 3
-            else:
-                prop["match_level"] = 4
-            prop["match_score"] = score
-            scored_matches.append(prop)
-
-    scored_matches.sort(
-        key=lambda p: (
-            p.get("match_score", 0),
-            1 if p.get("images") else 0,
-            p.get("updated_at") or p.get("created_at") or "",
-        ),
-        reverse=True,
-    )
-    return scored_matches[:50]
-
-
-@app.post("/clients/{request_id}/notes", response_model=ClientNotePublic, status_code=201)
-async def create_client_request_note(
-    request_id: str,
-    payload: ClientNoteInput,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-
-    note = await create_client_note_db(
-        owner_id,
-        request_id,
-        {
-            "content": payload.content,
-            "author_name": current_user.display_name or current_user.email.split("@")[0],
-            "author_role": current_user.role or "owner",
-            "color": payload.color,
-        },
-    )
-    return ClientNotePublic(**note)
-
-
-@app.get("/clients/{request_id}/notes", response_model=List[ClientNotePublic])
-async def list_client_request_notes(
-    request_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-
-    notes = await get_client_notes_db(owner_id, request_id)
-    return [ClientNotePublic(**n) for n in notes]
-
-
-@app.put("/clients/{request_id}/notes/{note_id}", response_model=ClientNotePublic)
-async def update_client_request_note(
-    request_id: str,
-    note_id: str,
-    payload: ClientNoteUpdate,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-
-    updates = payload.model_dump(exclude_unset=True)
-    updated = await update_client_note_db(owner_id, note_id, updates)
-    if not updated or updated.get("request_id") != request_id:
-        raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
-    return ClientNotePublic(**updated)
-
-
-@app.delete("/clients/{request_id}/notes/{note_id}", status_code=204)
-async def delete_client_request_note(
-    request_id: str,
-    note_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-
-    notes = await get_client_notes_db(owner_id, request_id)
-    if not any(note.get("id") == note_id for note in notes):
-        raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
-
-    deleted = await delete_client_note_db(owner_id, note_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
-    return None
-
-
-@app.put("/clients/{request_id}", response_model=ClientRequestPublic)
-async def update_client_request_endpoint(
-    request_id: str,
-    payload: ClientRequestUpdate,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    updates = payload.model_dump(exclude_unset=True)
-    if "city" in updates:
-        updates["city"] = normalize_city(updates.get("city"))
-    if "neighborhoods" in updates and isinstance(updates["neighborhoods"], list):
-        updates["neighborhoods"] = [str(v).strip() for v in updates["neighborhoods"] if str(v).strip()]
-    updated = await update_client_request_db(owner_id, request_id, updates)
-    if not updated:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-    return ClientRequestPublic(**updated)
-
-
-@app.delete("/clients/{request_id}", status_code=204)
-async def delete_client_request_endpoint(
-    request_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    ok = await delete_client_request_db(owner_id, request_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-    return None
-
-
-@app.get("/clients/offers")
-async def list_client_offers(current_user: UserPublic = Depends(get_current_user)):
-    """
-    List all client offers for the current company.
-    """
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-    offers = await get_client_offers_db(owner_id)
-    return [ClientOfferPublic(**o) for o in offers]
-
-
-@app.post("/clients/offers", response_model=ClientOfferPublic, status_code=201)
-async def create_client_offer(
-    payload: ClientOfferInput,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    if payload.property_id:
-        property_item = await get_property_by_id(payload.property_id)
-        if not property_item or property_item.get("owner_id") != owner_id:
-            raise HTTPException(status_code=404, detail="العقار غير موجود.")
-
-    await get_or_create_client_profile_with_type_db(
-        owner_id,
-        payload.client_name,
-        payload.phone_number,
-        "offer",
-    )
-
-    offer = await create_client_offer_db(owner_id, {
-        "client_name": payload.client_name,
-        "phone_number": payload.phone_number,
-        "property_id": payload.property_id,
-        "follow_up_details": payload.follow_up_details,
-    })
-    return ClientOfferPublic(**offer)
-
-
-@app.get("/clients/offers/by-client", response_model=List[ClientOfferPublic])
-async def get_client_offers_by_client(
-    client_name: str = Query(..., min_length=1),
-    phone_number: Optional[str] = Query(None),
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-    offers = await get_client_offers_by_client_db(owner_id, client_name, phone_number)
-    return [ClientOfferPublic(**o) for o in offers]
-
-
-@app.get("/clients/offers/{offer_id}", response_model=ClientOfferPublic)
-async def get_client_offer(
-    offer_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    offer = await get_client_offer_by_id_db(owner_id, offer_id)
-    if not offer:
-        raise HTTPException(status_code=404, detail="العرض غير موجود.")
-    return ClientOfferPublic(**offer)
-
-
-@app.put("/clients/offers/{offer_id}", response_model=ClientOfferPublic)
-async def update_client_offer(
-    offer_id: str,
-    payload: ClientOfferUpdate,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    updates = payload.model_dump(exclude_unset=True)
-    updated = await update_client_offer_db(owner_id, offer_id, updates)
-    if not updated:
-        raise HTTPException(status_code=404, detail="العرض غير موجود.")
-    return ClientOfferPublic(**updated)
-
-
-@app.delete("/clients/offers/{offer_id}", status_code=204)
-async def delete_client_offer(
-    offer_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    deleted = await delete_client_offer_db(owner_id, offer_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="العرض غير موجود.")
-    return None
-
-
-@app.post("/clients/offers/{offer_id}/notes", response_model=ClientNotePublic, status_code=201)
-async def create_client_offer_note(
-    offer_id: str,
-    payload: ClientNoteInput,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    note = await create_client_offer_note_db(
-        owner_id,
-        offer_id,
-        {
-            "content": payload.content,
-            "author_name": current_user.display_name or current_user.email.split("@")[0],
-            "author_role": current_user.role or "owner",
-            "color": payload.color,
-        },
-    )
-    return ClientNotePublic(**note)
-
-
-@app.get("/clients/offers/{offer_id}/notes", response_model=List[ClientNotePublic])
-async def list_client_offer_notes(
-    offer_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    _ = current_user
-    notes = await get_client_offer_notes_db(offer_id)
-    return [ClientNotePublic(**n) for n in notes]
-
-
-@app.put("/clients/offers/{offer_id}/notes/{note_id}", response_model=ClientNotePublic)
-async def update_client_offer_note(
-    offer_id: str,
-    note_id: str,
-    payload: ClientNoteUpdate,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    _ = offer_id
-
-    updates = payload.model_dump(exclude_unset=True)
-    updated = await update_client_offer_note_db(owner_id, note_id, updates)
-    if not updated:
-        raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
-    return ClientNotePublic(**updated)
-
-
-@app.delete("/clients/offers/{offer_id}/notes/{note_id}", status_code=204)
-async def delete_client_offer_note(
-    offer_id: str,
-    note_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    _ = offer_id
-    deleted = await delete_client_offer_note_db(owner_id, note_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
-    return None
-
-
-@app.post("/clients/profiles", response_model=ClientProfilePublic, status_code=201)
-async def create_client_profile(
-    payload: ClientProfileInput,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    profile_data = payload.model_dump()
-    if current_user.role == "employee" and (
-        profile_data.get("assigned_user_id") is not None or profile_data.get("assigned_user_name") is not None
-    ):
-        raise HTTPException(status_code=403, detail="تحديد الموظف المسؤول متاح للمالك أو المدير فقط.")
-    profile = await create_client_profile_db(owner_id, profile_data)
-    return ClientProfilePublic(**profile)
-
-
-@app.get("/clients/profiles", response_model=List[ClientProfilePublic])
-async def list_client_profiles(
-    client_type: Optional[str] = Query(None, description="Filter by type: request or offer"),
-    client_name: Optional[str] = Query(None, description="Filter by client name"),
-    phone_number: Optional[str] = Query(None, description="Filter by phone number"),
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-
-    if client_type:
-        profiles = await get_client_profiles_by_type_db(owner_id, client_type)
-    else:
-        profiles = await get_client_profiles_db(owner_id)
-
-    if client_name:
-        target_name = client_name.strip().lower()
-        profiles = [p for p in profiles if (p.get("client_name") or "").strip().lower() == target_name]
-    if phone_number:
-        target_phone = phone_number.strip()
-        profiles = [p for p in profiles if (p.get("phone_number") or "").strip() == target_phone]
-
-    return [ClientProfilePublic(**p) for p in profiles]
-
-
-@app.get("/clients/profiles/{profile_id}", response_model=ClientProfilePublic)
-async def get_client_profile(
-    profile_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    profile = await get_client_profile_by_id_db(owner_id, profile_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
-    return ClientProfilePublic(**profile)
-
-
-@app.put("/clients/profiles/{profile_id}", response_model=ClientProfilePublic)
-async def update_client_profile(
-    profile_id: str,
-    payload: ClientProfileUpdate,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    updates = payload.model_dump(exclude_unset=True)
-    if current_user.role == "employee" and (
-        "assigned_user_id" in updates or "assigned_user_name" in updates
-    ):
-        raise HTTPException(status_code=403, detail="تعديل الموظف المسؤول متاح للمالك أو المدير فقط.")
-    updated = await update_client_profile_db(owner_id, profile_id, updates)
-    if not updated:
-        raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
-    return ClientProfilePublic(**updated)
-
-
-@app.delete("/clients/profiles/{profile_id}", status_code=204)
-async def delete_client_profile(
-    profile_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    deleted = await delete_client_profile_db(owner_id, profile_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
-    return None
 
 
 @app.get("/public/companies/{owner_id}", response_model=CompanySettings)
@@ -2292,57 +1453,25 @@ async def create_property_endpoint(
             detail="لا يمكنك إضافة عروض جديدة قبل الاشتراك في إحدى الخطط. يرجى التوجه إلى صفحة الإعدادات لاختيار خطة مناسبة.",
         )
 
-    if property_input.input_mode == "manual":
-        if not property_input.property_type or not property_input.city:
-            raise HTTPException(status_code=422, detail="نوع العقار والمدينة مطلوبة عند الإضافة اليدوية.")
-
-        raw_parts = [
-            property_input.property_type,
-            property_input.neighborhood,
-            property_input.city,
-            f"المساحة {property_input.area}م²" if property_input.area else None,
-            f"السعر {property_input.price} ر.س" if property_input.price else None,
-            property_input.details,
-        ]
-        generated_raw_text = " - ".join(str(part).strip() for part in raw_parts if part)
-        processed_data = {
-            "city": property_input.city,
-            "neighborhood": property_input.neighborhood or "غير مذكور",
-            "property_type": property_input.property_type,
-            "area": property_input.area or 0.0,
-            "price": property_input.price or 0.0,
-            "details": property_input.details or "غير مذكور",
-            "owner_name": property_input.owner_name or "غير مذكور",
-            "owner_contact_number": property_input.owner_contact_number or "غير مذكور",
-            "marketer_contact_number": property_input.marketer_contact_number or "غير مذكور",
-            "formatted_description": property_input.formatted_description or property_input.details or generated_raw_text,
-            "region_within_city": property_input.region_within_city or "غير مذكور",
-        }
-        property_input.raw_text = property_input.raw_text or generated_raw_text
-    else:
-        if not property_input.raw_text.strip():
-            raise HTTPException(status_code=422, detail="الرجاء إدخال نص العرض.")
-
-        # Enforce daily AI limit per company (owner account for employees).
-        quota = await consume_company_daily_ai_quota(owner_id_for_plan, AI_DAILY_ANALYSIS_LIMIT)
-        if not quota.get("allowed"):
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"تم تجاوز الحد اليومي لتحليل الذكاء الاصطناعي ({quota.get('limit')} تحليل/يوم) "
-                    "لهذا الحساب. حاول مرة أخرى غدًا."
-                ),
-            )
-
-        # Use platform-level Gemini key only (per-user key is disabled).
-        processed_data = process_real_estate_text(
-            property_input.raw_text,
-            api_key=None,
+    # Enforce daily AI limit per company (owner account for employees).
+    quota = await consume_company_daily_ai_quota(owner_id_for_plan, AI_DAILY_ANALYSIS_LIMIT)
+    if not quota.get("allowed"):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"تم تجاوز الحد اليومي لتحليل الذكاء الاصطناعي ({quota.get('limit')} تحليل/يوم) "
+                "لهذا الحساب. حاول مرة أخرى غدًا."
+            ),
         )
 
+    # Use platform-level Gemini key only (per-user key is disabled).
+    processed_data = process_real_estate_text(
+        property_input.raw_text,
+        api_key=None,
+    )
     if not processed_data or "error" in processed_data:
         # If Gemini quota is exhausted, key is blocked, or AI fails, fall back to a minimal property
-        details = str((processed_data or {}).get("details", ""))
+        details = str(processed_data.get("details", ""))
         if (
             "RESOURCE_EXHAUSTED" in details
             or "PERMISSION_DENIED" in details

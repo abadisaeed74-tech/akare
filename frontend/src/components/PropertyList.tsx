@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Image, Upload } from 'antd';
 import type { UploadFile } from 'antd/es/upload/interface';
 import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, uploadFile, type UserPublic } from '../services/api';
@@ -6,21 +6,87 @@ import { EyeOutlined } from '@ant-design/icons';
 
 const { Text, Paragraph } = Typography;
 
+const parseVideoLinks = (value?: string): string[] =>
+    (value || '')
+        .split(/\r?\n/)
+        .map((url) => url.trim())
+        .filter(Boolean);
+
+const normalizeExternalHref = (value?: string | null): string | null => {
+    if (!value) return null;
+    const text = value.trim();
+    if (!text) return null;
+    if (/^https?:\/\//i.test(text)) return text;
+    return `https://${text.replace(/^\/+/, '')}`;
+};
+
+const getVideoEmbedUrl = (value: string): string | null => {
+    const href = normalizeExternalHref(value);
+    if (!href) return null;
+    try {
+        const parsed = new URL(href);
+        const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+
+        if (host === 'youtu.be') {
+            const id = parsed.pathname.split('/').filter(Boolean)[0];
+            return id ? `https://www.youtube.com/embed/${id}` : null;
+        }
+
+        if (host.includes('youtube.com')) {
+            const parts = parsed.pathname.split('/').filter(Boolean);
+            const id =
+                parsed.searchParams.get('v') ||
+                (['shorts', 'embed'].includes(parts[0]) ? parts[1] : undefined);
+            return id ? `https://www.youtube.com/embed/${id}` : null;
+        }
+
+        if (host.includes('tiktok.com')) {
+            const match = parsed.pathname.match(/\/video\/(\d+)/);
+            return match?.[1] ? `https://www.tiktok.com/embed/v2/${match[1]}` : null;
+        }
+
+        if (host.includes('instagram.com')) {
+            const parts = parsed.pathname.split('/').filter(Boolean);
+            const type = ['reel', 'p', 'tv'].includes(parts[0]) ? parts[0] : 'reel';
+            const id = ['reel', 'p', 'tv'].includes(parts[0]) ? parts[1] : undefined;
+            return id ? `https://www.instagram.com/${type}/${id}/embed` : null;
+        }
+    } catch {
+        return null;
+    }
+
+    return null;
+};
+
 interface PropertyListProps {
     properties: Property[];
     loading: boolean;
     onRefresh?: () => void;
     currentUser?: UserPublic | null;
+    openPropertyId?: string | null;
+    onPropertyClosed?: () => void;
+    onPropertySelect?: (property: Property) => void;
 }
 
-const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefresh, currentUser }) => {
+const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefresh, currentUser, openPropertyId, onPropertyClosed, onPropertySelect }) => {
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [isDetailsModalVisible, setIsDetailsModalVisible] = useState(false);
     const [detailsProperty, setDetailsProperty] = useState<Property | null>(null);
     const [editingProperty, setEditingProperty] = useState<Property | null>(null);
     const [editImageFiles, setEditImageFiles] = useState<UploadFile[]>([]);
-    const [editVideoFiles, setEditVideoFiles] = useState<UploadFile[]>([]);
     const [form] = Form.useForm();
+
+// Auto-open modal when openPropertyId is provided
+    useEffect(() => {
+        if (openPropertyId) {
+            const prop = properties.find(p => p.id === openPropertyId);
+            if (prop) {
+                setDetailsProperty(prop);
+                setIsDetailsModalVisible(true);
+                // Don't call onPropertyClosed here - it's called when modal is actually closed
+            }
+        }
+    }, [openPropertyId, properties]);
 
     const toUploadList = (urls?: string[], prefix = 'file'): UploadFile[] =>
         (urls || []).map((url, index) => ({
@@ -69,7 +135,6 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
     const openEditModal = (property: Property) => {
         setEditingProperty(property);
         setEditImageFiles(toUploadList(property.images, 'image'));
-        setEditVideoFiles(toUploadList(property.videos, 'video'));
         form.setFieldsValue({
             city: property.city === 'غير مذكور' ? '' : property.city,
             neighborhood: property.neighborhood === 'غير مذكور' ? '' : property.neighborhood,
@@ -82,6 +147,7 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                 property.owner_contact_number === 'غير مذكور' ? '' : property.owner_contact_number,
             marketer_contact_number:
                 property.marketer_contact_number === 'غير مذكور' ? '' : property.marketer_contact_number,
+            videos_text: (property.videos || []).join('\n'),
         });
         setIsModalVisible(true);
     };
@@ -90,18 +156,25 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
         setIsModalVisible(false);
         setEditingProperty(null);
         setEditImageFiles([]);
-        setEditVideoFiles([]);
         form.resetFields();
     };
 
-    const openDetailsModal = (property: Property) => {
+const openDetailsModal = (property: Property) => {
         setDetailsProperty(property);
         setIsDetailsModalVisible(true);
+        // Notify parent component if provided
+        if (onPropertySelect) {
+            onPropertySelect(property);
+        }
     };
 
-    const handleDetailsModalClose = () => {
+const handleDetailsModalClose = () => {
         setIsDetailsModalVisible(false);
         setDetailsProperty(null);
+        // Clear the auto-opened property ID when modal is closed
+        if (onPropertyClosed) {
+            onPropertyClosed();
+        }
     };
 
     const handleUpdate = async () => {
@@ -111,18 +184,16 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                 message.error('لا يمكن تعديل هذا العرض لأن المعرّف غير صالح.');
                 return;
             }
-            const hasUploadingMedia =
-                [...editImageFiles, ...editVideoFiles].some((f) => f.status === 'uploading');
+            const hasUploadingMedia = editImageFiles.some((f) => f.status === 'uploading');
             if (hasUploadingMedia) {
-                message.warning('يرجى انتظار اكتمال رفع الصور/الفيديو قبل حفظ التعديلات.');
+                message.warning('يرجى انتظار اكتمال رفع الصور قبل حفظ التعديلات.');
                 return;
             }
             const images = editImageFiles
                 .map((f) => f.url)
                 .filter((u): u is string => typeof u === 'string');
-            const videos = editVideoFiles
-                .map((f) => f.url)
-                .filter((u): u is string => typeof u === 'string');
+            const videos = parseVideoLinks(values.videos_text);
+            delete values.videos_text;
 
             await updateProperty(editingProperty.id, {
                 ...values,
@@ -144,11 +215,13 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
     const canDelete =
         !currentUser ||
         currentUser.role === 'owner' ||
+        currentUser.role === 'manager' ||
         !!currentUser.permissions?.can_delete_property;
 
     const canEdit =
         !currentUser ||
         currentUser.role === 'owner' ||
+        currentUser.role === 'manager' ||
         !!currentUser.permissions?.can_edit_property;
 
     const handleDelete = async (property: Property) => {
@@ -468,27 +541,18 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                             {editImageFiles.length >= 20 ? null : <div>+ إضافة صورة</div>}
                         </Upload>
                     </Form.Item>
-                    <Form.Item label="فيديوهات العقار (يمكن إضافة/حذف أكثر من فيديو)">
-                        <Upload
-                            multiple
-                            fileList={editVideoFiles}
-                            beforeUpload={(file) => {
-                                const uploadFileObj: UploadFile = {
-                                    uid: file.uid,
-                                    name: file.name,
-                                    status: 'uploading',
-                                    originFileObj: file,
-                                };
-                                setEditVideoFiles((prev) => prev.concat(uploadFileObj));
-                                uploadAndStore(uploadFileObj, setEditVideoFiles);
-                                return false;
-                            }}
-                            onRemove={(file) => {
-                                setEditVideoFiles((prev) => prev.filter((f) => f.uid !== file.uid));
-                            }}
-                        >
-                            <Button>إضافة فيديو</Button>
-                        </Upload>
+                    <Form.Item
+                        label="روابط فيديوهات العقار"
+                        name="videos_text"
+                        tooltip="يدعم روابط TikTok و YouTube Shorts و Instagram Reels. ضع كل رابط في سطر مستقل."
+                    >
+                        <Input.TextArea
+                            rows={4}
+                            placeholder={`مثال:
+https://www.tiktok.com/@account/video/123456789
+https://youtube.com/shorts/VIDEO_ID
+https://www.instagram.com/reel/REEL_ID/`}
+                        />
                     </Form.Item>
                 </Form>
             </Modal>
@@ -603,14 +667,49 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
                              </Paragraph>
                         )}
                         {detailsProperty.videos &&
-                            detailsProperty.videos.map((url, index) => (
-                                <div key={index} style={{ marginBottom: 12 }}>
-                                    <video controls style={{ width: '100%', borderRadius: 8 }}>
-                                        <source src={resolveMediaUrl(url)} />
-                                        متصفحك لا يدعم تشغيل الفيديو.
-                                    </video>
-                                </div>
-                            ))}
+                            detailsProperty.videos.map((url, index) => {
+                                const embedUrl = getVideoEmbedUrl(url);
+                                const href = normalizeExternalHref(url);
+
+                                if (embedUrl) {
+                                    return (
+                                        <div key={index} style={{ marginBottom: 12 }}>
+                                            <iframe
+                                                src={embedUrl}
+                                                title={`property-video-${index + 1}`}
+                                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                                allowFullScreen
+                                                style={{
+                                                    width: '100%',
+                                                    height: 420,
+                                                    border: 0,
+                                                    borderRadius: 8,
+                                                    background: '#000',
+                                                }}
+                                            />
+                                        </div>
+                                    );
+                                }
+
+                                if (url.startsWith('/uploads/')) {
+                                    return (
+                                        <div key={index} style={{ marginBottom: 12 }}>
+                                            <video controls style={{ width: '100%', borderRadius: 8 }}>
+                                                <source src={resolveMediaUrl(url)} />
+                                                متصفحك لا يدعم تشغيل الفيديو.
+                                            </video>
+                                        </div>
+                                    );
+                                }
+
+                                return (
+                                    <Paragraph key={index}>
+                                        <a href={href || url} target="_blank" rel="noopener noreferrer">
+                                            فتح رابط الفيديو {index + 1}
+                                        </a>
+                                    </Paragraph>
+                                );
+                            })}
                         {detailsProperty.documents && detailsProperty.documents.length > 0 && (
                              <Paragraph>
                                 <Text strong>الملفات المرفقة: </Text>

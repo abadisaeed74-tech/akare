@@ -6,7 +6,6 @@ import {
   AppstoreOutlined,
   TeamOutlined,
   LinkOutlined,
-  MessageOutlined,
   BarChartOutlined,
   WarningOutlined,
   FolderOpenOutlined,
@@ -14,6 +13,7 @@ import {
   UserDeleteOutlined,
   CheckCircleOutlined,
   RocketOutlined,
+  SolutionOutlined,
 } from '@ant-design/icons';
 import PlatformLogo from './PlatformLogo';
 import overviewShot from '../assets/landing/overview.png';
@@ -26,7 +26,7 @@ const { Title, Text, Paragraph } = Typography;
 const problemItems = [
   { icon: WarningOutlined, title: 'فوضى واتساب وإكسل', desc: 'البيانات موزعة بين محادثات وجداول بدون مرجعية واضحة.' },
   { icon: FolderOpenOutlined, title: 'تشتت الصور والملفات', desc: 'صور العرض والملفات تتبعثر ويصعب الوصول لها وقت العميل.' },
-  { icon: UserDeleteOutlined, title: 'ضياع العملاء والاستفسارات', desc: 'الاستفسارات تضيع بسبب غياب نظام متابعة مركزي.' },
+  { icon: UserDeleteOutlined, title: 'ضياع العملاء والطلبات', desc: 'طلبات العملاء تضيع بسبب غياب نظام متابعة مركزي.' },
   { icon: ClockCircleOutlined, title: 'بطء نشر العروض', desc: 'الإدخال اليدوي يستهلك وقت المسوّق ويؤخر الإغلاق.' },
 ];
 
@@ -35,33 +35,62 @@ const featureItems = [
   { icon: AppstoreOutlined, title: 'إدارة العروض من مكان واحد', desc: 'كل عقارات مكتبك في لوحة واحدة مع بحث وتصفية سريعة.' },
   { icon: TeamOutlined, title: 'إدارة الفريق والصلاحيات', desc: 'أنشئ حسابات موظفين وحدد من يضيف أو يعدّل أو يحذف.' },
   { icon: LinkOutlined, title: 'روابط عامة احترافية', desc: 'شارك العرض برابط جاهز للعميل مع صفحة منظمة وواضحة.' },
-  { icon: MessageOutlined, title: 'إدارة الاستفسارات', desc: 'استقبل استفسارات العملاء داخل النظام وتابع حالة الرد.' },
-  { icon: BarChartOutlined, title: 'متابعة الأداء والنتائج', desc: 'راقب عدد العروض والمشاهدات والاستفسارات لاتخاذ قرارات أسرع.' },
+  { icon: SolutionOutlined, title: 'إدارة الطلبات والعملاء', desc: 'تتبع طلبات العملاء ومتابعتهم حتى الإغلاق.' },
+{ icon: BarChartOutlined, title: 'متابعة الأداء والنتائج', desc: 'راقب عدد العروض والمشاهدات والطلبات لاتخاذ قرارات أسرع.' },
 ];
 
 const pricingPlans = [
   {
     key: 'starter',
-    name: 'Starter',
+    name: 'مبتدئ',
     price: '99 ر.س',
-    subtitle: 'للمكاتب الصغيرة والبدايات',
-    bullets: ['حتى 3 مستخدمين', 'حتى 100 عرض', 'تجربة مجانية 30 يوم'],
+    subtitle: 'مناسبة للمكاتب الصغيرة والمتوسطة',
+bullets: [
+      'إدارة عقارات وعملاء ومتابعات',
+      'حتى 3 مستخدمين',
+      'حتى 60 عقار',
+      'CRM كامل',
+      'المواعيد والمتابعات',
+      'البحث الذكي',
+      'مشاركة العقارات',
+      'تخزين 2 ج.ب',
+      'دعم أساسي',
+    ],
     highlighted: false,
   },
   {
     key: 'business',
-    name: 'Business',
-    price: '249 ر.س',
-    subtitle: 'الأكثر اختيارًا للمكاتب النشطة',
-    bullets: ['حتى 10 مستخدمين', 'حتى 500 عرض', 'إدارة متقدمة للفريق والعمليات'],
+    name: 'احترافي',
+    price: '199 ر.س',
+    subtitle: 'للمكاتب العقارية الجادة والفرق',
+bullets: [
+      'إدارة فريق وصلاحيات متقدمة',
+      'حتى 8 مستخدمين',
+      'حتى 120 عقار',
+      'Subdomain',
+      'AI أعلى',
+      'تقارير وإحصائيات أفضل',
+      'موقع أساسي',
+      'تخزين 10 ج.ب'
+    ],
     highlighted: true,
+    badge: 'الأكثر استخدامًا',
   },
   {
     key: 'enterprise',
-    name: 'Enterprise',
-    price: '799 ر.س',
-    subtitle: 'للشركات وإدارة المحافظ الكبيرة',
-    bullets: ['حتى 50 مستخدم', 'حتى 5000 عرض', 'دعم تشغيلي وتوسع أعلى'],
+    name: 'مؤسسات',
+    price: '599 ر.س',
+    subtitle: 'للشركات والفرق الكبيرة',
+bullets: [
+      'جميع ميزات مبتدئ واحترافي',
+      'تشغيل متكامل للمكتب العقاري',
+      'مستخدمين بلا حدود',
+      'عقارات بلا حدود',
+      'أداء أعلى',
+      'دعم مخصص',
+      'حلول قابلة للتوسع',
+      'تخزين 100 ج.ب'
+    ],
     highlighted: false,
   },
 ];
@@ -246,18 +275,18 @@ const LandingPage: React.FC = () => {
         <div id="pricing" style={{ marginTop: 28 }}>
           {sectionTitle('خطط واضحة تناسب حجم مكتبك', 'ابدأ بالخطة المناسبة اليوم، وارتقِ وقتما احتجت.')}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12 }}>
-            {pricingPlans.map((plan) => (
+{pricingPlans.map((plan) => (
               <Card
                 key={plan.key}
                 variant="borderless"
                 style={{
                   borderRadius: 14,
-                  border: `1px solid ${plan.highlighted ? palette.accent : palette.border}`,
-                  boxShadow: plan.highlighted ? '0 14px 30px rgba(47,122,66,0.18)' : undefined,
-                  background: plan.highlighted ? palette.accentSoft : '#fff',
+                  border: `1px solid ${plan.highlighted ? palette.accent : plan.key === 'enterprise' ? '#8b5cf6' : palette.border}`,
+                  boxShadow: plan.highlighted ? '0 14px 30px rgba(47,122,66,0.18)' : plan.key === 'enterprise' ? '0 14px 30px rgba(139,92,246,0.18)' : undefined,
+                  background: plan.highlighted ? palette.accentSoft : plan.key === 'enterprise' ? '#f5f3ff' : '#fff',
                 }}
               >
-                {plan.highlighted && <Tag color="green">الأكثر اختيارًا</Tag>}
+                {plan.badge && <Tag color={plan.key === 'business' ? 'gold' : 'purple'}>{plan.badge}</Tag>}
                 <Title level={4} style={{ marginTop: 8, color: palette.text }}>{plan.name}</Title>
                 <Title level={2} style={{ margin: '4px 0', color: palette.text }}>{plan.price}<Text style={{ color: palette.muted }}> / شهريًا</Text></Title>
                 <Paragraph style={{ color: palette.muted }}>{plan.subtitle}</Paragraph>
@@ -272,7 +301,7 @@ const LandingPage: React.FC = () => {
                 <Button
                   block
                   type={plan.highlighted ? 'primary' : 'default'}
-                  style={plan.highlighted ? { background: palette.accent } : undefined}
+                  style={plan.highlighted ? { background: palette.accent } : plan.key === 'enterprise' ? { background: '#8b5cf6' } : undefined}
                   onClick={() => navigate('/auth?mode=register')}
                 >
                   ابدأ مجانًا

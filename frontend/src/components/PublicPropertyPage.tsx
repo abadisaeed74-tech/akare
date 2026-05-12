@@ -8,6 +8,12 @@ import PlatformLogo from './PlatformLogo';
 
 const { Title, Text, Paragraph } = Typography;
 
+type VideoEmbed = {
+    href: string;
+    embedUrl?: string;
+    platform: string;
+};
+
 const normalizeExternalHref = (value?: string | null): string | null => {
     if (!value) return null;
     const text = value.trim();
@@ -20,6 +26,51 @@ const hasMeaningfulText = (value?: string | null): boolean => {
     if (!value) return false;
     const text = value.trim();
     return text !== '' && text !== 'غير مذكور';
+};
+
+const getVideoEmbed = (value: string): VideoEmbed => {
+    const href = normalizeExternalHref(value) || value;
+    try {
+        const parsed = new URL(href);
+        const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+
+        if (host === 'youtu.be') {
+            const id = parsed.pathname.split('/').filter(Boolean)[0];
+            return { href, embedUrl: id ? `https://www.youtube.com/embed/${id}` : undefined, platform: 'YouTube' };
+        }
+
+        if (host.includes('youtube.com')) {
+            const parts = parsed.pathname.split('/').filter(Boolean);
+            const id =
+                parsed.searchParams.get('v') ||
+                (['shorts', 'embed'].includes(parts[0]) ? parts[1] : undefined);
+            return { href, embedUrl: id ? `https://www.youtube.com/embed/${id}` : undefined, platform: 'YouTube' };
+        }
+
+        if (host.includes('tiktok.com')) {
+            const match = parsed.pathname.match(/\/video\/(\d+)/);
+            return {
+                href,
+                embedUrl: match?.[1] ? `https://www.tiktok.com/embed/v2/${match[1]}` : undefined,
+                platform: 'TikTok',
+            };
+        }
+
+        if (host.includes('instagram.com')) {
+            const parts = parsed.pathname.split('/').filter(Boolean);
+            const type = ['reel', 'p', 'tv'].includes(parts[0]) ? parts[0] : 'reel';
+            const id = ['reel', 'p', 'tv'].includes(parts[0]) ? parts[1] : undefined;
+            return {
+                href,
+                embedUrl: id ? `https://www.instagram.com/${type}/${id}/embed` : undefined,
+                platform: 'Instagram',
+            };
+        }
+    } catch {
+        // Fall back to native video rendering for uploaded files.
+    }
+
+    return { href, platform: 'فيديو' };
 };
 
 const PublicPropertyPage: React.FC = () => {
@@ -130,6 +181,9 @@ const PublicPropertyPage: React.FC = () => {
                                 عرض جميع العروض لهذا المكتب
                             </Button>
                         )}
+                        <Button onClick={() => navigate(-1)} style={{ marginTop: 8 }}>
+                          رجوع
+                        </Button>
                     </div>
                 </div>
 
@@ -280,51 +334,100 @@ const PublicPropertyPage: React.FC = () => {
                         <Title level={5}>الفيديوهات</Title>
                         <div
                             style={{
-                                display: 'flex',
-                                flexWrap: 'wrap',
-                                gap: 8,
-                                justifyContent: 'flex-start',
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                                gap: 12,
                             }}
                         >
-                            {property.videos.map((url, index) => (
-                                <div
-                                    key={index}
-                                    style={{ cursor: 'pointer', position: 'relative', width: 160, height: 100 }}
-                                    onClick={() => setActiveVideoIndex(index)}
-                                >
-                                    <video
-                                        style={{
-                                            width: '100%',
-                                            height: '100%',
-                                            borderRadius: 8,
-                                            objectFit: 'cover',
-                                            backgroundColor: '#000',
-                                            display: 'block',
-                                        }}
-                                        muted
-                                        preload="metadata"
-                                    >
-                                        <source src={resolveMediaUrl(url)} />
-                                        متصفحك لا يدعم تشغيل الفيديو.
-                                    </video>
-                                    {/* طبقة فوقية توضح أن هذا فيديو وقابل للنقر حتى لو لم تظهر أول فريم على الجوال */}
-                                    <div
-                                        style={{
-                                            position: 'absolute',
-                                            inset: 0,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: '#fff',
-                                            fontSize: 28,
-                                            background: 'rgba(0, 0, 0, 0.25)',
-                                            pointerEvents: 'none',
-                                        }}
-                                    >
-                                        ▶
-                                    </div>
-                                </div>
-                            ))}
+                            {property.videos.map((url, index) => {
+                                const video = getVideoEmbed(url);
+                                const isUploadedVideo = !video.embedUrl && url.startsWith('/uploads/');
+
+                                if (video.embedUrl) {
+                                    return (
+                                        <div
+                                            key={index}
+                                            style={{
+                                                border: '1px solid #e4e7df',
+                                                borderRadius: 12,
+                                                overflow: 'hidden',
+                                                background: '#fff',
+                                            }}
+                                        >
+                                            <div style={{ padding: '8px 12px', fontWeight: 700, color: '#2f4d37' }}>
+                                                {video.platform}
+                                            </div>
+                                            <iframe
+                                                src={video.embedUrl}
+                                                title={`${video.platform} video ${index + 1}`}
+                                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                                allowFullScreen
+                                                style={{
+                                                    width: '100%',
+                                                    height: 420,
+                                                    border: 0,
+                                                    display: 'block',
+                                                    background: '#000',
+                                                }}
+                                            />
+                                        </div>
+                                    );
+                                }
+
+                                if (isUploadedVideo) {
+                                    return (
+                                        <div
+                                            key={index}
+                                            style={{ cursor: 'pointer', position: 'relative', height: 180 }}
+                                            onClick={() => setActiveVideoIndex(index)}
+                                        >
+                                            <video
+                                                style={{
+                                                    width: '100%',
+                                                    height: '100%',
+                                                    borderRadius: 12,
+                                                    objectFit: 'cover',
+                                                    backgroundColor: '#000',
+                                                    display: 'block',
+                                                }}
+                                                muted
+                                                preload="metadata"
+                                            >
+                                                <source src={resolveMediaUrl(url)} />
+                                                متصفحك لا يدعم تشغيل الفيديو.
+                                            </video>
+                                            <div
+                                                style={{
+                                                    position: 'absolute',
+                                                    inset: 0,
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    color: '#fff',
+                                                    fontSize: 28,
+                                                    background: 'rgba(0, 0, 0, 0.25)',
+                                                    pointerEvents: 'none',
+                                                    borderRadius: 12,
+                                                }}
+                                            >
+                                                ▶
+                                            </div>
+                                        </div>
+                                    );
+                                }
+
+                                return (
+                                    <Card key={index} size="small" style={{ borderRadius: 12 }}>
+                                        <Text strong>{video.platform}</Text>
+                                        <Paragraph ellipsis={{ rows: 1 }} style={{ marginTop: 8 }}>
+                                            {video.href}
+                                        </Paragraph>
+                                        <Button href={video.href} target="_blank" rel="noopener noreferrer">
+                                            فتح الفيديو
+                                        </Button>
+                                    </Card>
+                                );
+                            })}
                         </div>
                         <Modal
                             open={activeVideoIndex !== null}
@@ -434,5 +537,3 @@ const PublicPropertyPage: React.FC = () => {
 };
 
 export default PublicPropertyPage;
-
-

@@ -1,7 +1,9 @@
-from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, Header, Response
+from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, Header
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
+from bson import ObjectId
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 import os
@@ -41,18 +43,6 @@ from models import (
     PropertyInquiryPublic,
     PropertyInquiryStatusUpdate,
     DashboardOverview,
-    ClientRequestInput,
-    ClientRequestPublic,
-    ClientRequestUpdate,
-    ClientNoteInput,
-    ClientNotePublic,
-    ClientNoteUpdate,
-    ClientOfferInput,
-    ClientOfferPublic,
-    ClientOfferUpdate,
-    ClientProfileInput,
-    ClientProfilePublic,
-    ClientProfileUpdate,
 )
 from ai_processor import process_real_estate_text, process_client_request_text
 from database import (
@@ -68,7 +58,8 @@ from database import (
     get_user_by_email,
     get_user_by_id,
     create_user,
-    update_user_gemini_key,
+update_user_gemini_key,
+    update_user_display_name,
     get_property_by_id,
     get_or_create_company_for_owner,
     update_company_settings_db,
@@ -94,33 +85,11 @@ from database import (
     get_owner_inquiries_db,
     count_owner_inquiries_db,
     count_owner_total_views_db,
-    update_property_inquiry_status_db,
-    create_client_request_db,
-    get_client_requests_db,
-    update_client_request_db,
-    get_client_request_by_id_db,
-    delete_client_request_db,
-    create_client_note_db,
-    get_client_notes_db,
-    update_client_note_db,
-    delete_client_note_db,
-    create_client_offer_db,
-    get_client_offers_db,
-    get_client_offers_by_client_db,
-    get_client_offer_by_id_db,
-    update_client_offer_db,
-    delete_client_offer_db,
+update_property_inquiry_status_db,
     create_client_offer_note_db,
     get_client_offer_notes_db,
     update_client_offer_note_db,
     delete_client_offer_note_db,
-    create_client_profile_db,
-    get_client_profiles_db,
-    get_client_profile_by_id_db,
-    update_client_profile_db,
-    delete_client_profile_db,
-    get_or_create_client_profile_with_type_db,
-    get_client_profiles_by_type_db,
 )
 
 
@@ -265,9 +234,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 def require_permission(user: UserPublic, permission: str) -> None:
     """
     Ensure that the current user has a given permission.
-    Owners and managers always have all operational permissions.
+    Owners always have all permissions.
     """
-    if user.role in {"owner", "manager"}:
+    if user.role == "owner":
         return
     perms = user.permissions or {}
     has_perm = bool(perms.get(permission))
@@ -306,22 +275,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserPublic:
     return UserPublic(**user_data)
 
 # Configure CORS
-CORS_ORIGINS = {
-    FRONTEND_BASE_URL,
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-}
-CORS_ORIGINS.update(
-    origin.strip().rstrip("/")
-    for origin in os.getenv("CORS_ORIGINS", "").split(",")
-    if origin.strip()
-)
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=sorted(CORS_ORIGINS),
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -682,6 +638,7 @@ async def get_settings_overview(current_user: UserPublic = Depends(get_current_u
                 email=u["email"],
                 role=u.get("role", "owner"),
                 status=u.get("status", "active"),
+                display_name=u.get("display_name"),
                 permissions=u.get("permissions") or {},
             )
         )
@@ -1148,12 +1105,9 @@ async def list_team_users(current_user: UserPublic = Depends(get_current_user)):
     """
     List all users (owner + employees) that belong to the current company.
     """
-    if current_user.role not in {"owner", "manager"}:
+    if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه إدارة المستخدمين.")
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
-    raw_team = await get_team_for_owner(owner_id)
+    raw_team = await get_team_for_owner(current_user.id)
     team: List[TeamUserPublic] = []
     for u in raw_team:
         team.append(
@@ -1202,11 +1156,11 @@ async def create_team_user(
                 f"يرجى ترقية الخطة لإضافة موظفين جدد.",
             )
 
-    # Reuse same password validations as registration
+# Reuse same password validations as registration
     if len(data.password.encode("utf-8")) > 72:
         raise HTTPException(
             status_code=400,
-detail="كلمة المرور طويلة جداً، الرجاء استخدام كلمة مرور أقصر (أقل من 72 حرف/بايت).",
+            detail="كلمة المرور طويلة جداً، الرجاء استخدام كلمة مرور أقصر (أقل من 72 حرف/بايت).",
         )
 
     hashed = get_password_hash(data.password)
@@ -1216,7 +1170,6 @@ detail="كلمة المرور طويلة جداً، الرجاء استخدام 
         password_hash=hashed,
         permissions=data.permissions,
         display_name=data.display_name,
-        role=data.role,
     )
     return TeamUserPublic(
         id=employee["id"],
@@ -1249,15 +1202,6 @@ async def update_team_user(
         updates["permissions"] = data.permissions
     if data.display_name is not None:
         updates["display_name"] = data.display_name
-    if data.role is not None:
-        updates["role"] = data.role
-        if data.role == "manager":
-            updates["permissions"] = {
-                "can_add_property": True,
-                "can_edit_property": True,
-                "can_delete_property": True,
-                "can_manage_files": True,
-            }
 
     updated = await update_employee_user(current_user.id, user_id, updates)
     if not updated:
@@ -1274,26 +1218,14 @@ async def update_team_user(
 
 
 @app.get("/public/properties/{property_id}", response_model=Property)
-async def get_public_property(property_id: str, request: Request, response: Response):
+async def get_public_property(property_id: str):
     """
     Public read-only endpoint to view a single property by ID.
     No authentication required, used for share links.
     """
-    cookie_name = f"viewed_property_{re.sub(r'[^A-Za-z0-9_-]', '_', property_id)}"
-    has_recent_view = request.cookies.get(cookie_name) == "1"
-    prop = await get_property_by_id(property_id) if has_recent_view else await increment_property_view_count(property_id)
+    prop = await increment_property_view_count(property_id)
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    if not has_recent_view:
-        response.set_cookie(
-            key=cookie_name,
-            value="1",
-            max_age=60 * 60 * 24,
-            httponly=True,
-            samesite="none" if FRONTEND_BASE_URL.startswith("https://") else "lax",
-            secure=FRONTEND_BASE_URL.startswith("https://"),
-            path="/",
-        )
     return prop
 
 
@@ -1369,258 +1301,163 @@ async def update_dashboard_inquiry_status(
     return PropertyInquiryPublic(**updated)
 
 
-# ===== Clients / CRM endpoints =====
+# ===== Client Requests endpoints =====
 
-@app.get("/appointments/placeholder")
-async def list_appointments_placeholder(current_user: UserPublic = Depends(get_current_user)):
-    """
-    Placeholder endpoint for upcoming appointments module.
-    Keeps frontend integration stable until full appointments model is implemented.
-    """
-    _ = current_user
-    return []
+from models import ClientRequestInput, ClientRequestPublic, ClientRequestUpdate, ClientNoteInput, ClientNotePublic, ClientNoteUpdate, ClientOfferInput, ClientOfferPublic, ClientOfferUpdate, ClientProfileInput, ClientProfilePublic, ClientProfileUpdate
+from database import (
+    create_client_request_db,
+    get_client_requests_db,
+    update_client_request_db,
+    get_client_request_by_id_db,
+    delete_client_request_db,
+    get_properties,
+    create_client_note_db,
+    get_client_notes_db,
+    update_client_note_db,
+    delete_client_note_db,
+    create_client_offer_db,
+    get_client_offers_db,
+    get_client_offers_by_client_db,
+    update_client_offer_db,
+    delete_client_offer_db,
+    create_client_profile_db,
+    get_client_profiles_db,
+    get_client_profile_by_id_db,
+    update_client_profile_db,
+    delete_client_profile_db,
+    get_or_create_client_profile_with_type_db,
+    get_client_profiles_by_type_db,
+    property_collection,
+)
 
 
-@app.get("/appointments")
-async def list_appointments(
-    date_filter: Optional[str] = Query(None, description="today | this_week | delayed"),
-    employee_id: Optional[str] = Query(None),
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        return []
+# ===== Appointments Models =====
 
-    def _client_key(name: Optional[str], phone: Optional[str]) -> str:
-        return f"{(name or 'غير محدد').strip()}|{(phone or '').strip()}"
+class AppointmentItem(BaseModel):
+    """Combined appointment from request or offer."""
+    id: str
+    type: str  # "request" or "offer"
+    client_name: str
+    phone_number: Optional[str] = None
+    property_type: Optional[str] = None
+    city: Optional[str] = None
+    neighborhood: Optional[str] = None
+    property_id: Optional[str] = None  # For offers only
+    reminder_type: Optional[str] = None
+    deadline_at: Optional[str] = None
+    reminder_before_minutes: Optional[int] = None
+    follow_up_details: Optional[str] = None
+    status: str = "new"
+    created_at: str
+    # Additional fields for frontend navigation and display
+    client_key: Optional[str] = None  # Computed as "name|phone" for navigation
+    source_id: Optional[str] = None   # Same as id for navigation
+    source_type: Optional[str] = None  # Same as type: "request" or "offer"
+    title: Optional[str] = None  # Property/Request description for display
 
-    def _to_dt(value):
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str) and value.strip():
-            try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
-            except Exception:
-                return None
-        return None
-
-    def _format_number(value: object) -> Optional[str]:
-        if value in (None, "", "غير مذكور"):
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return str(value).strip() or None
-        if number.is_integer():
-            return f"{int(number):,}"
-        return f"{number:,.2f}".rstrip("0").rstrip(".")
-
-    def _build_offer_title(prop: Optional[Dict[str, object]]) -> str:
-        if not prop:
-            return "عرض غير مرتبط بعقار"
-
-        parts = [
-            str(prop.get("property_type") or "عقار").strip(),
-            str(prop.get("neighborhood") or "").strip(),
-            str(prop.get("city") or "").strip(),
-        ]
-        title = " - ".join(part for part in parts if part and part != "غير مذكور")
-
-        details: List[str] = []
-        area = _format_number(prop.get("area"))
-        price = _format_number(prop.get("price"))
-        if area:
-            details.append(f"{area}م²")
-        if price:
-            details.append(f"{price} ر.س")
-
-        if details:
-            return f"{title or 'عقار'} ({'، '.join(details)})"
-        return title or "عقار"
-
-    profiles = await get_client_profiles_db(owner_id)
-    assigned_map: Dict[str, Dict[str, Optional[str]]] = {}
-    for profile in profiles:
-        assigned_map[_client_key(profile.get("client_name"), profile.get("phone_number"))] = {
-            "id": profile.get("assigned_user_id"),
-            "name": profile.get("assigned_user_name"),
-        }
-
-    requests = await get_client_requests_db(owner_id, limit=500)
-    offers = await get_client_offers_db(owner_id, limit=500)
-    property_title_cache: Dict[str, str] = {}
-
-    now = datetime.utcnow()
-    rows: List[Dict[str, object]] = []
-
-    for req in requests:
-        deadline = _to_dt(req.get("deadline_at"))
-        if not deadline:
-            continue
-        ck = _client_key(req.get("client_name"), req.get("phone_number"))
-        assigned_user = assigned_map.get(ck, {})
-        assigned_user_id = assigned_user.get("id")
-        assigned_user_name = assigned_user.get("name")
-
-        if current_user.role == "employee" and assigned_user_id and assigned_user_id != current_user.id:
-            continue
-        if current_user.role == "employee" and assigned_user_id is None:
-            continue
-        if current_user.role in ("owner", "manager") and employee_id and assigned_user_id != employee_id:
-            continue
-
-        if date_filter == "today" and deadline.date() != now.date():
-            continue
-        if date_filter == "this_week":
-            week_start = now - timedelta(days=now.weekday())
-            week_end = week_start + timedelta(days=7)
-            if not (week_start.date() <= deadline.date() < week_end.date()):
-                continue
-        if date_filter == "delayed" and deadline >= now:
-            continue
-
-        rows.append({
-            "id": req.get("id"),
-            "type": "request",
-            "client_name": req.get("client_name"),
-            "phone_number": req.get("phone_number"),
-            "property_type": req.get("property_type"),
-            "city": req.get("city"),
-            "neighborhood": (req.get("neighborhoods") or [None])[0],
-            "property_id": None,
-            "reminder_type": req.get("reminder_type"),
-            "deadline_at": req.get("deadline_at"),
-            "reminder_before_minutes": req.get("reminder_before_minutes"),
-            "follow_up_details": req.get("follow_up_details"),
-            "status": req.get("status", "new"),
-            "created_at": req.get("created_at"),
-            "source_id": req.get("id"),
-            "source_type": "request",
-            "client_key": ck,
-            "title": f"{req.get('property_type', 'طلب')} - {req.get('city', 'غير محدد')}",
-            "assigned_user_id": assigned_user_id if current_user.role in ("owner", "manager") else None,
-            "assigned_user_name": assigned_user_name if current_user.role in ("owner", "manager") else None,
-        })
-
-    for offer in offers:
-        deadline = _to_dt(offer.get("deadline_at"))
-        if not deadline:
-            continue
-        property_id = str(offer.get("property_id") or "").strip()
-        offer_title = property_title_cache.get(property_id)
-        if offer_title is None:
-            prop = await get_property_by_id(property_id) if property_id else None
-            if prop and prop.get("owner_id") != owner_id:
-                prop = None
-            offer_title = _build_offer_title(prop)
-            if property_id:
-                property_title_cache[property_id] = offer_title
-        ck = _client_key(offer.get("client_name"), offer.get("phone_number"))
-        assigned_user = assigned_map.get(ck, {})
-        assigned_user_id = assigned_user.get("id")
-        assigned_user_name = assigned_user.get("name")
-
-        if current_user.role == "employee" and assigned_user_id and assigned_user_id != current_user.id:
-            continue
-        if current_user.role == "employee" and assigned_user_id is None:
-            continue
-        if current_user.role in ("owner", "manager") and employee_id and assigned_user_id != employee_id:
-            continue
-
-        if date_filter == "today" and deadline.date() != now.date():
-            continue
-        if date_filter == "this_week":
-            week_start = now - timedelta(days=now.weekday())
-            week_end = week_start + timedelta(days=7)
-            if not (week_start.date() <= deadline.date() < week_end.date()):
-                continue
-        if date_filter == "delayed" and deadline >= now:
-            continue
-
-        rows.append({
-            "id": offer.get("id"),
-            "type": "offer",
-            "client_name": offer.get("client_name"),
-            "phone_number": offer.get("phone_number"),
-            "property_type": None,
-            "city": None,
-            "neighborhood": None,
-            "property_id": offer.get("property_id"),
-            "reminder_type": offer.get("reminder_type"),
-            "deadline_at": offer.get("deadline_at"),
-            "reminder_before_minutes": offer.get("reminder_before_minutes"),
-            "follow_up_details": offer.get("follow_up_details"),
-            "status": offer.get("status", "new"),
-            "created_at": offer.get("created_at"),
-            "source_id": offer.get("id"),
-            "source_type": "offer",
-            "client_key": ck,
-            "title": offer_title,
-            "assigned_user_id": assigned_user_id if current_user.role in ("owner", "manager") else None,
-            "assigned_user_name": assigned_user_name if current_user.role in ("owner", "manager") else None,
-        })
-
-    rows.sort(key=lambda x: _to_dt(x.get("deadline_at")) or now)
-    return rows
 
 
 @app.post("/clients", response_model=ClientRequestPublic, status_code=201)
-async def create_client_request_endpoint(
+async def create_client_request(
     payload: ClientRequestInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Create a new client request by analyzing the raw text with AI.
+    Also creates or updates client profile with client_types including "request".
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    text = (payload.raw_text or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="نص الطلب مطلوب.")
-
-    processed = process_client_request_text(text, api_key=None)
-    if not processed or "error" in processed:
-        details = str((processed or {}).get("details", ""))
-        raise HTTPException(status_code=422, detail=f"تعذر تحليل الطلب: {details or 'خطأ غير متوقع'}")
-
-    neighborhoods = processed.get("neighborhoods")
-    if not isinstance(neighborhoods, list):
-        neighborhoods = []
-    neighborhoods = [str(n).strip() for n in neighborhoods if str(n).strip()]
-
-    def _to_int_or_none(v):
-        if v in (None, ""):
-            return None
-        try:
-            return int(float(v))
-        except Exception:
-            return None
-
-    doc = {
-        "raw_text": text,
-        "client_name": str(processed.get("client_name") or "غير محدد").strip() or "غير محدد",
-        "phone_number": str(processed.get("phone_number")).strip() if processed.get("phone_number") else None,
-        "property_type": str(processed.get("property_type") or "غير محدد").strip() or "غير محدد",
-        "city": normalize_city(str(processed.get("city") or "غير محدد").strip() or "غير محدد"),
-        "neighborhoods": neighborhoods,
-        "budget_min": _to_int_or_none(processed.get("budget_min")),
-        "budget_max": _to_int_or_none(processed.get("budget_max")),
-        "area_min": _to_int_or_none(processed.get("area_min")),
-        "area_max": _to_int_or_none(processed.get("area_max")),
-        "additional_requirements": str(processed.get("additional_requirements") or "").strip(),
-        "action_plan": str(processed.get("suggested_action_plan") or "").strip(),
-        "follow_up_details": payload.follow_up_details,
-        "status": "new",
+    
+    # Check if user is platform admin to skip quota limit
+    is_platform_admin = current_user.email.strip().lower() in PLATFORM_ADMIN_EMAILS
+    
+    # Enforce daily AI limit for non-admin users
+    if not is_platform_admin:
+        quota = await consume_company_daily_ai_quota(owner_id, AI_DAILY_ANALYSIS_LIMIT)
+        if not quota.get("allowed"):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"تم تجاوز الحد اليومي لتحليل الذكاء الاصطناعي ({quota.get('limit')} تحليل/يوم) "
+                    "لهذا الحساب. حاول مرة أخرى غدًا."
+                ),
+            )
+    
+    # Process raw text with AI to extract client details
+    processed = process_client_request_text(payload.raw_text, api_key=None)
+    
+    # Determine client name - use provided or AI-extracted
+    client_name = payload.client_name if payload.client_name else (processed.get("client_name", "غير محدد") if processed else "غير محدد")
+    phone_number = payload.phone_number if payload.phone_number else (processed.get("phone_number") if processed else None)
+    
+    # Create or get client profile with "request" type (this is the key fix!)
+    # This ensures client exists independently from requests
+    await get_or_create_client_profile_with_type_db(
+        owner_id,
+        client_name,
+        phone_number,
+        "request"  # Mark as request-type client
+    )
+    
+# Build the request data - use pre-filled values if provided, otherwise use AI-extracted values
+    request_data = {
+        "raw_text": payload.raw_text,
+        "client_name": client_name,
+        "phone_number": phone_number,
+        "property_type": processed.get("property_type", "غير محدد") if processed else "غير محدد",
+        "city": processed.get("city", "غير محدد") if processed else "غير محدد",
+        "neighborhoods": processed.get("neighborhoods", []) if processed else [],
+        "budget_min": int(processed.get("budget_min")) if processed and processed.get("budget_min") is not None else None,
+        "budget_max": int(processed.get("budget_max")) if processed and processed.get("budget_max") is not None else None,
+        "area_min": int(processed.get("area_min")) if processed and processed.get("area_min") is not None else None,
+        "area_max": int(processed.get("area_max")) if processed and processed.get("area_max") is not None else None,
+        "additional_requirements": processed.get("additional_requirements", "") if processed else "",
+        "action_plan": processed.get("suggested_action_plan", "") if processed else "",
+        "reminder_type": processed.get("reminder_type") if processed else None,
+        "deadline_at": processed.get("deadline_at") if processed else None,
     }
-    created = await create_client_request_db(owner_id, doc)
-    return ClientRequestPublic(**created)
+    
+    result = await create_client_request_db(owner_id, request_data)
+    return ClientRequestPublic(**result)
 
 
 @app.get("/clients", response_model=List[ClientRequestPublic])
-async def list_client_requests_endpoint(current_user: UserPublic = Depends(get_current_user)):
+async def list_client_requests(current_user: UserPublic = Depends(get_current_user)):
+    """
+    List all client requests for the current company.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         return []
-    rows = await get_client_requests_db(owner_id, limit=500)
-    return [ClientRequestPublic(**r) for r in rows]
+    requests = await get_client_requests_db(owner_id)
+    return [ClientRequestPublic(**r) for r in requests]
+
+
+@app.put("/clients/{request_id}", response_model=ClientRequestPublic)
+async def update_client_request(
+    request_id: str,
+    payload: ClientRequestUpdate,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Update a client request.
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    
+    updates = payload.model_dump(exclude_unset=True)
+    # Convert neighborhoods list to list if provided as string
+    if "neighborhoods" in updates and isinstance(updates["neighborhoods"], str):
+        neighborhoods_str = updates["neighborhoods"]
+        updates["neighborhoods"] = [n.strip() for n in neighborhoods_str.replace("،", ",").split(",") if n.strip()]
+    
+    updated = await update_client_request_db(owner_id, request_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="الطلب غير موجود.")
+    return ClientRequestPublic(**updated)
 
 
 @app.get("/clients/{request_id}/matches", response_model=List[Property])
@@ -1628,14 +1465,23 @@ async def get_client_request_matches(
     request_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Get matching properties for a client request using multi-level matching.
+    Level 1: Strict (city + property_type + neighborhoods + budget)
+    Level 2: Relaxed (city + property_type + budget)
+    Level 3: Simple (city + budget only)
+    Level 4: Last resort - show latest 20 properties
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         return []
 
+    # Get the client request
     request_item = await get_client_request_by_id_db(owner_id, request_id)
     if not request_item:
         raise HTTPException(status_code=404, detail="الطلب غير موجود.")
 
+    # Extract filters from request
     city = normalize_city((request_item.get("city") or "").strip())
     property_type = (request_item.get("property_type") or "").strip()
     neighborhoods = [normalize_neighborhood(n) for n in (request_item.get("neighborhoods") or []) if n]
@@ -1649,7 +1495,8 @@ async def get_client_request_matches(
             return ""
         text = str(value).strip().lower()
         text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه")
-        return re.sub(r"\s+", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        return text
 
     def property_type_matches(prop_type: str, wanted_type: str) -> bool:
         prop = clean_text(prop_type)
@@ -1738,89 +1585,114 @@ async def get_client_request_matches(
     return scored_matches[:50]
 
 
-@app.post("/clients/{request_id}/notes", response_model=ClientNotePublic, status_code=201)
-async def create_client_request_note(
+@app.delete("/clients/{request_id}", status_code=204)
+async def delete_client_request(
     request_id: str,
-    payload: ClientNoteInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+Delete a client request.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
 
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
+    deleted = await delete_client_request_db(owner_id, request_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="الطلب غير موجود.")
+    return None
+
+
+# ===== Client Request Notes endpoints =====
+
+
+@app.post("/clients/{request_id}/notes", response_model=ClientNotePublic, status_code=201)
+async def create_client_note(
+    request_id: str,
+    payload: ClientNoteInput,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Create a note for a client request.
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+
+# Get author info from current user - prefer display_name if available, otherwise use email prefix
+    user_doc = await get_user_by_id(current_user.id)
+
+    # Use display_name if available and not empty, otherwise fallback to email prefix
+    display_name_val = user_doc.get("display_name") if user_doc else None
+    if display_name_val and display_name_val.strip():
+        author_name = display_name_val
+    else:
+        author_name = current_user.email.split("@")[0]
+
+    author_role = current_user.role or "owner"
 
     note = await create_client_note_db(
         owner_id,
         request_id,
         {
             "content": payload.content,
-            "author_name": current_user.display_name or current_user.email.split("@")[0],
-            "author_role": current_user.role or "owner",
+            "author_name": author_name,
+            "author_role": author_role,
             "color": payload.color,
         },
     )
-    return ClientNotePublic(**note)
+    return note
 
 
 @app.get("/clients/{request_id}/notes", response_model=List[ClientNotePublic])
-async def list_client_request_notes(
+async def get_client_notes(
     request_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Get all notes for a client request.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
-        return []
-
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
+        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
 
     notes = await get_client_notes_db(owner_id, request_id)
-    return [ClientNotePublic(**n) for n in notes]
+    return notes
 
 
 @app.put("/clients/{request_id}/notes/{note_id}", response_model=ClientNotePublic)
-async def update_client_request_note(
+async def update_client_note(
     request_id: str,
     note_id: str,
     payload: ClientNoteUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Update a client note.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
 
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-
     updates = payload.model_dump(exclude_unset=True)
-    updated = await update_client_note_db(owner_id, note_id, updates)
-    if not updated or updated.get("request_id") != request_id:
+    note = await update_client_note_db(owner_id, note_id, updates)
+    if not note:
         raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
-    return ClientNotePublic(**updated)
+    return note
 
 
 @app.delete("/clients/{request_id}/notes/{note_id}", status_code=204)
-async def delete_client_request_note(
+async def delete_client_note(
     request_id: str,
     note_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Delete a client note.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    request_item = await get_client_request_by_id_db(owner_id, request_id)
-    if not request_item:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-
-    notes = await get_client_notes_db(owner_id, request_id)
-    if not any(note.get("id") == note_id for note in notes):
-        raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
 
     deleted = await delete_client_note_db(owner_id, note_id)
     if not deleted:
@@ -1828,41 +1700,78 @@ async def delete_client_request_note(
     return None
 
 
-@app.put("/clients/{request_id}", response_model=ClientRequestPublic)
-async def update_client_request_endpoint(
-    request_id: str,
-    payload: ClientRequestUpdate,
+# ===== Client Offers (Properties assigned to clients) endpoints =====
+
+
+@app.post("/clients/register", status_code=201)
+async def register_client_only(
+    client_name: str = Query(..., min_length=1),
+    phone_number: Optional[str] = Query(None),
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Register a client without an offer (just for tracking).
+    Creates client profile with client_types=["offer"] for persistence.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    updates = payload.model_dump(exclude_unset=True)
-    if "city" in updates:
-        updates["city"] = normalize_city(updates.get("city"))
-    if "neighborhoods" in updates and isinstance(updates["neighborhoods"], list):
-        updates["neighborhoods"] = [str(v).strip() for v in updates["neighborhoods"] if str(v).strip()]
-    updated = await update_client_request_db(owner_id, request_id, updates)
-    if not updated:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-    return ClientRequestPublic(**updated)
+
+    # Create or get client profile with "offer" type (this ensures client persists independently)
+    profile = await get_or_create_client_profile_with_type_db(
+        owner_id,
+        client_name,
+        phone_number,
+        "offer"  # Mark as offer-type client
+    )
+
+    # Check if client already has offers for count
+    existing_offers = await get_client_offers_by_client_db(owner_id, client_name, phone_number)
+    if existing_offers:
+        return {"exists": True, "client_name": client_name, "offers_count": len(existing_offers), "profile_id": profile.get("id")}
+
+    # Return success - profile created/updated
+    return {"exists": False, "client_name": client_name, "id": profile.get("id")}
 
 
-@app.delete("/clients/{request_id}", status_code=204)
-async def delete_client_request_endpoint(
-    request_id: str,
+@app.post("/clients/offers", response_model=ClientOfferPublic, status_code=201)
+async def create_client_offer(
+    payload: ClientOfferInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Create a client offer (link a property to a client).
+    Also creates or updates client profile with client_types including "offer".
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    ok = await delete_client_request_db(owner_id, request_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
-    return None
+
+    # Verify the property exists and belongs to this owner (only if property_id is provided and not empty)
+    if payload.property_id:
+        property_item = await get_property_by_id(payload.property_id)
+        if not property_item:
+            raise HTTPException(status_code=404, detail="العقار غير موجود.")
+        if property_item.get("owner_id") != owner_id:
+            raise HTTPException(status_code=404, detail="العقار غير موجود.")
+
+    # Create or get client profile with "offer" type (this ensures client exists independently)
+    await get_or_create_client_profile_with_type_db(
+        owner_id,
+        payload.client_name,
+        payload.phone_number,
+        "offer"  # Mark as offer-type client
+    )
+
+    offer = await create_client_offer_db(owner_id, {
+        "client_name": payload.client_name,
+        "phone_number": payload.phone_number,
+        "property_id": payload.property_id,
+    })
+    return ClientOfferPublic(**offer)
 
 
-@app.get("/clients/offers")
+@app.get("/clients/offers", response_model=List[ClientOfferPublic])
 async def list_client_offers(current_user: UserPublic = Depends(get_current_user)):
     """
     List all client offers for the current company.
@@ -1874,62 +1783,20 @@ async def list_client_offers(current_user: UserPublic = Depends(get_current_user
     return [ClientOfferPublic(**o) for o in offers]
 
 
-@app.post("/clients/offers", response_model=ClientOfferPublic, status_code=201)
-async def create_client_offer(
-    payload: ClientOfferInput,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    if payload.property_id:
-        property_item = await get_property_by_id(payload.property_id)
-        if not property_item or property_item.get("owner_id") != owner_id:
-            raise HTTPException(status_code=404, detail="العقار غير موجود.")
-
-    await get_or_create_client_profile_with_type_db(
-        owner_id,
-        payload.client_name,
-        payload.phone_number,
-        "offer",
-    )
-
-    offer = await create_client_offer_db(owner_id, {
-        "client_name": payload.client_name,
-        "phone_number": payload.phone_number,
-        "property_id": payload.property_id,
-        "follow_up_details": payload.follow_up_details,
-    })
-    return ClientOfferPublic(**offer)
-
-
 @app.get("/clients/offers/by-client", response_model=List[ClientOfferPublic])
 async def get_client_offers_by_client(
     client_name: str = Query(..., min_length=1),
     phone_number: Optional[str] = Query(None),
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Get all offers for a specific client.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         return []
     offers = await get_client_offers_by_client_db(owner_id, client_name, phone_number)
     return [ClientOfferPublic(**o) for o in offers]
-
-
-@app.get("/clients/offers/{offer_id}", response_model=ClientOfferPublic)
-async def get_client_offer(
-    offer_id: str,
-    current_user: UserPublic = Depends(get_current_user),
-):
-    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-
-    offer = await get_client_offer_by_id_db(owner_id, offer_id)
-    if not offer:
-        raise HTTPException(status_code=404, detail="العرض غير موجود.")
-    return ClientOfferPublic(**offer)
 
 
 @app.put("/clients/offers/{offer_id}", response_model=ClientOfferPublic)
@@ -1938,6 +1805,9 @@ async def update_client_offer(
     payload: ClientOfferUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Update a client offer.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
@@ -1954,6 +1824,9 @@ async def delete_client_offer(
     offer_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Delete a client offer.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
@@ -1964,23 +1837,47 @@ async def delete_client_offer(
     return None
 
 
+# ===== Client Offer Notes endpoints =====
+
+
 @app.post("/clients/offers/{offer_id}/notes", response_model=ClientNotePublic, status_code=201)
 async def create_client_offer_note(
     offer_id: str,
     payload: ClientNoteInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Create a note for a client offer.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+
+    # Verify the offer exists and belongs to this owner
+    offers = await get_client_offers_db(owner_id)
+    offer = next((o for o in offers if o.get("id") == offer_id), None)
+    if not offer:
+        raise HTTPException(status_code=404, detail="العرض غير موجود.")
+
+    # Get author info from current user - prefer display_name if available, otherwise use email prefix
+    user_doc = await get_user_by_id(current_user.id)
+
+    # Use display_name if available and not empty, otherwise fallback to email prefix
+    display_name_val = user_doc.get("display_name") if user_doc else None
+    if display_name_val and display_name_val.strip():
+        author_name = display_name_val
+    else:
+        author_name = current_user.email.split("@")[0]
+
+    author_role = current_user.role or "owner"
 
     note = await create_client_offer_note_db(
         owner_id,
         offer_id,
         {
             "content": payload.content,
-            "author_name": current_user.display_name or current_user.email.split("@")[0],
-            "author_role": current_user.role or "owner",
+            "author_name": author_name,
+            "author_role": author_role,
             "color": payload.color,
         },
     )
@@ -1992,7 +1889,12 @@ async def list_client_offer_notes(
     offer_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    _ = current_user
+    """
+    List all notes for a client offer.
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return []
     notes = await get_client_offer_notes_db(offer_id)
     return [ClientNotePublic(**n) for n in notes]
 
@@ -2004,10 +1906,12 @@ async def update_client_offer_note(
     payload: ClientNoteUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Update a client offer note.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    _ = offer_id
 
     updates = payload.model_dump(exclude_unset=True)
     updated = await update_client_offer_note_db(owner_id, note_id, updates)
@@ -2022,14 +1926,20 @@ async def delete_client_offer_note(
     note_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Delete a client offer note.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    _ = offer_id
+
     deleted = await delete_client_offer_note_db(owner_id, note_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="الملاحظة غير موجودة.")
     return None
+
+
+# ===== Client Profile endpoints =====
 
 
 @app.post("/clients/profiles", response_model=ClientProfilePublic, status_code=201)
@@ -2037,41 +1947,49 @@ async def create_client_profile(
     payload: ClientProfileInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Create a new client profile.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
-    profile_data = payload.model_dump()
-    if current_user.role == "employee" and (
-        profile_data.get("assigned_user_id") is not None or profile_data.get("assigned_user_name") is not None
-    ):
-        raise HTTPException(status_code=403, detail="تحديد الموظف المسؤول متاح للمالك أو المدير فقط.")
-    profile = await create_client_profile_db(owner_id, profile_data)
+
+    profile = await create_client_profile_db(owner_id, payload.model_dump())
     return ClientProfilePublic(**profile)
 
 
 @app.get("/clients/profiles", response_model=List[ClientProfilePublic])
 async def list_client_profiles(
     client_type: Optional[str] = Query(None, description="Filter by type: request or offer"),
-    client_name: Optional[str] = Query(None, description="Filter by client name"),
+    client_name: Optional[str] = Query(None, description="Filter by client name (case-insensitive)"),
     phone_number: Optional[str] = Query(None, description="Filter by phone number"),
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    List all client profiles for the current company.
+    Optionally filter by client_type: "request" or "offer"
+    
+    This endpoint returns persistent client profiles.
+    - client_type="request": profiles with "request" in client_types (for Requests tab)
+    - client_type="offer": profiles with "offer" in client_types (for Offers tab)
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         return []
-
+# Filter by client_type if provided
     if client_type:
         profiles = await get_client_profiles_by_type_db(owner_id, client_type)
     else:
         profiles = await get_client_profiles_db(owner_id)
-
+    
+    # Filter by client_name if provided (case-insensitive match)
     if client_name:
-        target_name = client_name.strip().lower()
-        profiles = [p for p in profiles if (p.get("client_name") or "").strip().lower() == target_name]
+        profiles = [p for p in profiles if p.get("client_name") and p.get("client_name").lower() == client_name.strip().lower()]
+    
+    # Filter by phone_number if provided (exact match)
     if phone_number:
-        target_phone = phone_number.strip()
-        profiles = [p for p in profiles if (p.get("phone_number") or "").strip() == target_phone]
-
+        profiles = [p for p in profiles if p.get("phone_number") == phone_number.strip()]
+    
     return [ClientProfilePublic(**p) for p in profiles]
 
 
@@ -2080,6 +1998,9 @@ async def get_client_profile(
     profile_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Get a specific client profile by ID.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
@@ -2096,15 +2017,14 @@ async def update_client_profile(
     payload: ClientProfileUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Update a client profile.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
 
     updates = payload.model_dump(exclude_unset=True)
-    if current_user.role == "employee" and (
-        "assigned_user_id" in updates or "assigned_user_name" in updates
-    ):
-        raise HTTPException(status_code=403, detail="تعديل الموظف المسؤول متاح للمالك أو المدير فقط.")
     updated = await update_client_profile_db(owner_id, profile_id, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
@@ -2116,6 +2036,9 @@ async def delete_client_profile(
     profile_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
+    """
+    Delete a client profile.
+    """
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
@@ -2124,6 +2047,220 @@ async def delete_client_profile(
     if not deleted:
         raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
     return None
+
+
+# ===== Appointments endpoint =====
+
+@app.get("/appointments", response_model=List[AppointmentItem])
+async def list_appointments(
+    date_filter: Optional[str] = Query(None, description="Filter by date: today, this_week, delayed"),
+    employee_id: Optional[str] = Query(None, description="Filter by assigned employee ID"),
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Get combined appointments from both ClientRequests and ClientOffers that have reminder dates.
+    Only returns items that have deadline_at set.
+    
+    - If user is employee, only return appointments for clients assigned to that employee
+    - If user is owner, they can see all appointments (optionally filter by employee)
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return []
+    
+    appointments: List[AppointmentItem] = []
+    now = datetime.utcnow()
+    current_user_id = current_user.id
+    
+    # Get client profiles to map client to assigned employee
+    all_profiles = await get_client_profiles_db(owner_id)
+    
+    # Build a mapping from client (name+phone) to assigned_user_id
+    # Use both client_name and phone_number as key
+    def client_key(name: str, phone: Optional[str]) -> str:
+        return f"{(name or '').lower()}::{(phone or '').strip().lower()}"
+    
+    client_to_employee: Dict[str, str] = {}
+    for profile in all_profiles:
+        key = client_key(profile.get("client_name", ""), profile.get("phone_number"))
+        if profile.get("assigned_user_id"):
+            client_to_employee[key] = profile["assigned_user_id"]
+    
+    # Get requests with deadline_at (reminders)
+    requests = await get_client_requests_db(owner_id)
+    for req in requests:
+        deadline = req.get("deadline_at")
+        if not deadline:
+            continue
+        
+        # Parse deadline as datetime
+        try:
+            if isinstance(deadline, str):
+                deadline_dt = datetime.fromisoformat(deadline.replace("Z", "+00:00")).replace(tzinfo=None)
+            else:
+                deadline_dt = deadline
+        except Exception:
+            continue
+        
+        # Get client key for this request
+        req_key = client_key(req.get("client_name", ""), req.get("phone_number"))
+        
+        # Check employee access control
+        assigned_emp = client_to_employee.get(req_key)
+        
+        # If current user is employee, only show their assigned clients
+        if current_user.role == "employee":
+            if assigned_emp != current_user_id:
+                continue
+        # If current user is owner and employee_id filter is provided
+        elif current_user.role == "owner" and employee_id:
+            if assigned_emp != employee_id:
+                continue
+        
+        # Apply date filter
+        if date_filter == "delayed":
+            if deadline_dt >= now:
+                continue
+        elif date_filter == "today":
+            from datetime import date as date_type
+            today_start = datetime.combine(now.date(), datetime.min.time())
+            today_end = datetime.combine(now.date(), datetime.max.time())
+            if not (today_start <= deadline_dt <= today_end):
+                continue
+        elif date_filter == "this_week":
+            # Get start and end of current week (Sunday to Saturday)
+            from datetime import timedelta
+            days_since_sunday = now.weekday() + 1  # Monday=0, Sunday=6 in python's weekday
+            if now.weekday() == 6:  # Sunday
+                week_start = now
+            else:
+                week_start = now - timedelta(days=days_since_sunday)
+            week_end = week_start + timedelta(days=7)
+            if not (week_start <= deadline_dt < week_end):
+                continue
+        
+        # Convert deadline to ISO string
+        deadline_iso = deadline_dt.isoformat() if isinstance(deadline_dt, datetime) else str(deadline)
+        
+# Build client key for navigation (name|phone format)
+        req_client_key = f"{req.get('client_name', 'غير محدد')}|{req.get('phone_number') or ''}"
+        # Build title from request info
+        req_title = f"{req.get('property_type', '')} - {req.get('city', '')}" if req.get('property_type') or req.get('city') else req.get('client_name', 'غير محدد')
+        
+appointments.append(AppointmentItem(
+            id=req.get("id", ""),
+            type="request",
+            client_name=req.get("client_name", "غير محدد"),
+            phone_number=req.get("phone_number"),
+            property_type=req.get("property_type"),
+            city=req.get("city"),
+            neighborhood=req.get("neighborhoods", [])[0] if req.get("neighborhoods") else None,
+            property_id=None,
+            reminder_type=req.get("reminder_type"),
+            deadline_at=deadline_iso,
+            reminder_before_minutes=req.get("reminder_before_minutes"),
+            follow_up_details=req.get("follow_up_details"),
+            status=req.get("status", "new"),
+            created_at=req.get("created_at", "").isoformat() if req.get("created_at") else now.isoformat(),
+            # Navigation fields for frontend
+            client_key=req_client_key,
+            source_id=req.get("id", ""),
+            source_type="request",
+            title=req_title,
+        ))
+    
+    # Get offers with deadline_at (reminders)
+    offers = await get_client_offers_db(owner_id)
+    for offer in offers:
+        deadline = offer.get("deadline_at")
+        if not deadline:
+            continue
+        
+        # Parse deadline as datetime
+        try:
+            if isinstance(deadline, str):
+                deadline_dt = datetime.fromisoformat(deadline.replace("Z", "+00:00")).replace(tzinfo=None)
+            else:
+                deadline_dt = deadline
+        except Exception:
+            continue
+        
+        # Get client key for this offer
+        offer_key = client_key(offer.get("client_name", ""), offer.get("phone_number"))
+        
+        # Check employee access control
+        assigned_emp = client_to_employee.get(offer_key)
+        
+        # If current user is employee, only show their assigned clients
+        if current_user.role == "employee":
+            if assigned_emp != current_user_id:
+                continue
+        # If current user is owner and employee_id filter is provided
+        elif current_user.role == "owner" and employee_id:
+            if assigned_emp != employee_id:
+                continue
+        
+        # Apply date filter
+        if date_filter == "delayed":
+            if deadline_dt >= now:
+                continue
+        elif date_filter == "today":
+            from datetime import date as date_type
+            today_start = datetime.combine(now.date(), datetime.min.time())
+            today_end = datetime.combine(now.date(), datetime.max.time())
+            if not (today_start <= deadline_dt <= today_end):
+                continue
+        elif date_filter == "this_week":
+            from datetime import timedelta
+            days_since_sunday = now.weekday() + 1
+            if now.weekday() == 6:
+                week_start = now
+            else:
+                week_start = now - timedelta(days=days_since_sunday)
+            week_end = week_start + timedelta(days=7)
+            if not (week_start <= deadline_dt < week_end):
+                continue
+        
+# Convert deadline to ISO string
+        deadline_iso = deadline_dt.isoformat() if isinstance(deadline_dt, datetime) else str(deadline)
+        
+        # Build client key for navigation (name|phone format)
+        offer_client_key = f"{offer.get('client_name', 'غير محدد')}|{offer.get('phone_number') or ''}"
+        # Build title from property info if available
+        offer_title = "عرض عقاري"
+        if offer.get("property_id"):
+            prop = await get_property_by_id(offer.get("property_id"))
+            if prop:
+                offer_title = f"{prop.get('property_type', 'عقار')} - {prop.get('city', '')}"
+        
+appointments.append(AppointmentItem(
+            id=offer.get("id", ""),
+            type="offer",
+            client_name=offer.get("client_name", "غير محدد"),
+            phone_number=offer.get("phone_number"),
+            property_type=None,  # Will be loaded from property if needed
+            city=None,
+            neighborhood=None,
+            property_id=offer.get("property_id"),
+            reminder_type=offer.get("reminder_type"),
+            deadline_at=deadline_iso,
+            reminder_before_minutes=offer.get("reminder_before_minutes"),
+            follow_up_details=offer.get("follow_up_details"),
+            status=offer.get("status", "active"),
+            created_at=offer.get("created_at", "").isoformat() if offer.get("created_at") else now.isoformat(),
+            # Navigation fields for frontend
+            client_key=offer_client_key,
+            source_id=offer.get("id", ""),
+            source_type="offer",
+            title=offer_title,
+        ))
+    
+    # Sort by deadline (upcoming first, delayed last)
+    appointments.sort(key=lambda x: (
+        x.deadline_at or "9999-12-31T23:59:59",  # Sort ascending
+    ))
+    
+    return appointments
 
 
 @app.get("/public/companies/{owner_id}", response_model=CompanySettings)
@@ -2266,6 +2403,25 @@ async def update_my_gemini_key(
         raise HTTPException(status_code=404, detail="User not found")
     return UserPublic(**updated)
 
+
+class DisplayNameUpdate(BaseModel):
+    display_name: Optional[str] = None
+
+
+@app.put("/me/display-name", response_model=UserPublic)
+async def update_my_display_name(
+    data: DisplayNameUpdate,
+    current_user: UserPublic = Depends(get_current_user),
+):
+    """
+    Update user's display name for use in notes and other places.
+    This name will appear in client notes instead of email prefix.
+    """
+    updated = await update_user_display_name(current_user.id, data.display_name)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserPublic(**updated)
+
 @app.post("/properties", response_model=Property, status_code=201)
 async def create_property_endpoint(
     property_input: PropertyInput,
@@ -2292,38 +2448,10 @@ async def create_property_endpoint(
             detail="لا يمكنك إضافة عروض جديدة قبل الاشتراك في إحدى الخطط. يرجى التوجه إلى صفحة الإعدادات لاختيار خطة مناسبة.",
         )
 
-    if property_input.input_mode == "manual":
-        if not property_input.property_type or not property_input.city:
-            raise HTTPException(status_code=422, detail="نوع العقار والمدينة مطلوبة عند الإضافة اليدوية.")
-
-        raw_parts = [
-            property_input.property_type,
-            property_input.neighborhood,
-            property_input.city,
-            f"المساحة {property_input.area}م²" if property_input.area else None,
-            f"السعر {property_input.price} ر.س" if property_input.price else None,
-            property_input.details,
-        ]
-        generated_raw_text = " - ".join(str(part).strip() for part in raw_parts if part)
-        processed_data = {
-            "city": property_input.city,
-            "neighborhood": property_input.neighborhood or "غير مذكور",
-            "property_type": property_input.property_type,
-            "area": property_input.area or 0.0,
-            "price": property_input.price or 0.0,
-            "details": property_input.details or "غير مذكور",
-            "owner_name": property_input.owner_name or "غير مذكور",
-            "owner_contact_number": property_input.owner_contact_number or "غير مذكور",
-            "marketer_contact_number": property_input.marketer_contact_number or "غير مذكور",
-            "formatted_description": property_input.formatted_description or property_input.details or generated_raw_text,
-            "region_within_city": property_input.region_within_city or "غير مذكور",
-        }
-        property_input.raw_text = property_input.raw_text or generated_raw_text
-    else:
-        if not property_input.raw_text.strip():
-            raise HTTPException(status_code=422, detail="الرجاء إدخال نص العرض.")
-
-        # Enforce daily AI limit per company (owner account for employees).
+# Enforce daily AI limit per company (owner account for employees).
+    # Skip quota check for platform admin emails
+    is_platform_admin = current_user.email.strip().lower() in PLATFORM_ADMIN_EMAILS
+    if not is_platform_admin:
         quota = await consume_company_daily_ai_quota(owner_id_for_plan, AI_DAILY_ANALYSIS_LIMIT)
         if not quota.get("allowed"):
             raise HTTPException(
@@ -2334,15 +2462,14 @@ async def create_property_endpoint(
                 ),
             )
 
-        # Use platform-level Gemini key only (per-user key is disabled).
-        processed_data = process_real_estate_text(
-            property_input.raw_text,
-            api_key=None,
-        )
-
+    # Use platform-level Gemini key only (per-user key is disabled).
+    processed_data = process_real_estate_text(
+        property_input.raw_text,
+        api_key=None,
+    )
     if not processed_data or "error" in processed_data:
         # If Gemini quota is exhausted, key is blocked, or AI fails, fall back to a minimal property
-        details = str((processed_data or {}).get("details", ""))
+        details = str(processed_data.get("details", ""))
         if (
             "RESOURCE_EXHAUSTED" in details
             or "PERMISSION_DENIED" in details

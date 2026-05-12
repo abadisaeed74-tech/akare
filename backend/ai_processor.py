@@ -213,3 +213,68 @@ def process_search_text(text: str, api_key: str | None = None) -> dict:
         print(f"Error processing search text with AI: {e}")
         return {"error": "Failed to process search text with AI", "details": str(e)}
 
+
+def process_client_request_text(text: str, api_key: str | None = None) -> dict:
+    """
+    Parse unstructured buyer request message into structured mini-CRM fields.
+    """
+    prompt = f"""
+    أنت محلل بيانات عقارية للسوق السعودي.
+    اقرأ رسالة عميل غير منظمة، وأخرج JSON فقط بدون أي نص إضافي.
+
+    النص:
+    "{text}"
+
+    استخرج الحقول التالية:
+    - client_name: اسم العميل، وإذا غير مذكور استخدم "غير محدد"
+    - phone_number: رقم الجوال أو null
+    - property_type: نوع العقار (فيلا/شقة/أرض/عمارة...) أو "غير محدد"
+    - city: المدينة أو "غير محدد"
+    - neighborhoods: مصفوفة أسماء أحياء (قد تكون فارغة)
+    - budget_min: الميزانية من (رقم صحيح) أو null
+    - budget_max:الميزانية إلى (رقم صحيح) أو null
+    - area_min: المساحة من بالمتر المربع (رقم صحيح) أو null
+    - area_max: المساحة إلى بالمتر المربع (رقم صحيح) أو null
+    - additional_requirements: نص مختصر للشروط الإضافية، أو ""
+    - follow_up_details: نص يصف ما يجب على الموظف عمله في المتابعة القادمة، أو ""
+    - suggested_action_plan: جملة استراتيجية عمل قصيرة قابلة للتنفيذ
+    - reminder_type: نوع التذكير. إذا ذكر العميل موعد للمعاينة استخدم "viewing"، وإذا يريد متابعة استخدم "follow_up"، وإلا null
+    - deadline_at: الموعد النهائي بالتنسيق ISO 8601 (مثال: "2025-05-12T16:00:00") مع YEAR必须是السنةالحالية2025، أو null إذا غير مذكور
+
+    القواعد المهمة:
+    1) JSON صالح فقط.
+    2) لا تضف مفاتيح إضافية.
+    3) neighborhoods يجب أن تكون Array دائمًا (قد تكون فارغة).
+    4) budget_min / budget_max أرقام صحيحة أو null.
+    5) area_min / area_max أرقام صحيحة أو null.
+    6) deadline_at: يجب أن يكون YEAR=2025 (السنةالحالية). إذا ذكر العميل "12 مايو" يجب أن يكون "2025-05-12". استخدم تنسيق 24 ساعة في ISO (مثال: 4 مساء = 16:00).
+    7) reminder_type يجب أن يكون null أو "follow_up" أو "viewing" فقط.
+
+    مثال:
+    {{
+      "client_name": "أبو أحمد",
+      "phone_number": "0501234567",
+      "property_type": "أرض تجارية",
+      "city": "جدة",
+      "neighborhoods": ["النعيم", "المحمدية"],
+      "budget_min": 2000000,
+      "budget_max": 2500000,
+      "area_min": 1000,
+      "area_max": 1500,
+      "additional_requirements": "مستعجل خلال هذا الأسبوع",
+      "follow_up_details": "التواصل مع العميل لعرض العقارات المطابقة.",
+      "suggested_action_plan": "العميل جاهز للشراء؛ طابق طلبه فورًا مع عروض شمال جدة وحدد موعد معاينة.",
+      "reminder_type": "viewing",
+      "deadline_at": "2025-05-12T16:00:00"
+    }}
+    """
+    try:
+        client = _get_gemini_client(api_key)
+        response = _generate_with_retry(client, prompt)
+        text_response = getattr(response, "text", "")
+        json_text = text_response.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(json_text)
+        return data
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"Error processing client request text with AI: {e}")
+        return {"error": "Failed to process client request text with AI", "details": str(e)}

@@ -30,6 +30,19 @@ html, body, #root {
   font-family: var(--ant-font-family) !important;
 }
 
+/* Add spacing between client tabs */
+.ant-tabs-nav .ant-tabs-tab {
+  margin-inline-end: 20px !important;
+}
+
+.ant-tabs-nav .ant-tabs-tab:last-child {
+  margin-inline-end: 0 !important;
+}
+
+.ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab {
+  margin-inline-start: 20px !important;
+}
+
 body {
   margin: 0;
   padding: 0;

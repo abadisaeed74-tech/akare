@@ -22,6 +22,11 @@ property_collection = database.get_collection("properties")
 user_collection = database.get_collection("users")
 company_collection = database.get_collection("companies")
 inquiry_collection = database.get_collection("property_inquiries")
+client_request_collection = database.get_collection("client_requests")
+client_request_notes_collection = database.get_collection("client_request_notes")
+client_offer_collection = database.get_collection("client_offers")
+notification_queue_collection = database.get_collection("notification_queue")
+client_profile_collection = database.get_collection("client_profiles")
 PROPERTY_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 # Helper to convert document from DB
@@ -368,6 +373,7 @@ def user_helper(user) -> dict:
         "role": role,
         "status": status,
         "company_owner_id": user.get("company_owner_id") or (str(_id) if _id is not None else None),
+        "display_name": user.get("display_name"),
         "permissions": user.get("permissions") or {},
     }
 
@@ -435,6 +441,21 @@ async def update_user_gemini_key(user_id: str, gemini_api_key: Optional[str]) ->
     return user_helper(updated) if updated else None
 
 
+async def update_user_display_name(user_id: str, display_name: Optional[str]) -> Optional[dict]:
+    """Update user's display name for use in notes and other places."""
+    try:
+        oid = ObjectId(user_id)
+    except InvalidId:
+        return None
+    update_doc = {"display_name": display_name} if display_name else {"display_name": None}
+    updated = await user_collection.find_one_and_update(
+        {"_id": oid},
+        {"$set": update_doc},
+        return_document=ReturnDocument.AFTER,
+    )
+    return user_helper(updated) if updated else None
+
+
 async def get_team_for_owner(owner_user_id: str) -> List[dict]:
     """
     Return all users that belong to the given owner (company).
@@ -468,7 +489,7 @@ async def update_employee_user(owner_user_id: str, user_id: str, updates: Dict[s
     except InvalidId:
         return None
 
-    allowed_fields = {"status", "permissions"}
+    allowed_fields = {"status", "permissions", "display_name", "role"}
     update_doc: Dict[str, Any] = {k: v for k, v in updates.items() if k in allowed_fields}
     if not update_doc:
         user = await user_collection.find_one({"_id": oid})
@@ -491,6 +512,8 @@ async def create_employee_user(
     email: str,
     password_hash: str,
     permissions: Optional[Dict[str, bool]] = None,
+    display_name: Optional[str] = None,
+    role: str = "employee",
 ) -> dict:
     """
     Create a new employee user under the given owner.
@@ -501,16 +524,29 @@ async def create_employee_user(
         "can_delete_property": False,
         "can_manage_files": True,
     }
-    perms = permissions or default_permissions
-    return await create_user(
-        email=email,
-        password_hash=password_hash,
-        gemini_api_key=None,
-        role="employee",
-        company_owner_id=owner_user_id,
-        status="active",
-        permissions=perms,
-    )
+    manager_permissions = {
+        "can_add_property": True,
+        "can_edit_property": True,
+        "can_delete_property": True,
+        "can_manage_files": True,
+    }
+    user_role = role if role in {"manager", "employee"} else "employee"
+    perms = manager_permissions if user_role == "manager" else (permissions or default_permissions)
+    user_doc = {
+        "email": email,
+        "password_hash": password_hash,
+        "gemini_api_key": None,
+        "role": user_role,
+        "company_owner_id": owner_user_id,
+        "status": "active",
+        "permissions": perms,
+    }
+    if display_name:
+        user_doc["display_name"] = display_name
+    
+    result = await user_collection.insert_one(user_doc)
+    new_user = await user_collection.find_one({"_id": result.inserted_id})
+    return user_helper(new_user)
 
 
 # ===== Company helpers =====
@@ -941,3 +977,760 @@ async def get_platform_office_detail_db(owner_user_id: str, properties_limit: in
         "properties": properties,
     }
 
+
+def client_request_helper(item: Dict[str, Any]) -> Dict[str, Any]:
+    _id = item.get("_id")
+    return {
+        "id": str(_id) if _id is not None else "",
+        "owner_id": item.get("owner_id", ""),
+        "raw_text": item.get("raw_text", ""),
+        "client_name": item.get("client_name", "غير محدد"),
+        "phone_number": item.get("phone_number"),
+        "property_type": item.get("property_type", "غير محدد"),
+        "city": item.get("city", "غير محدد"),
+        "neighborhoods": item.get("neighborhoods", []) or [],
+        "budget_min": item.get("budget_min"),
+        "budget_max": item.get("budget_max"),
+        "area_min": item.get("area_min"),
+        "area_max": item.get("area_max"),
+        "additional_requirements": item.get("additional_requirements", ""),
+        "action_plan": item.get("action_plan", ""),
+        "reminder_type": item.get("reminder_type"),
+        "deadline_at": item.get("deadline_at"),
+        "reminder_before_minutes": int(item.get("reminder_before_minutes", 120) or 120),
+        "reminder_sent_at": item.get("reminder_sent_at"),
+        "follow_up_details": item.get("follow_up_details"),
+        "status": item.get("status", "new"),
+        "created_at": item.get("created_at") or datetime.utcnow(),
+        "updated_at": item.get("updated_at") or datetime.utcnow(),
+    }
+
+
+async def create_client_request_db(owner_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    now = datetime.utcnow()
+    doc = {
+        "owner_id": owner_id,
+        "raw_text": payload.get("raw_text", ""),
+        "client_name": payload.get("client_name", "غير محدد"),
+        "phone_number": payload.get("phone_number"),
+        "property_type": payload.get("property_type", "غير محدد"),
+        "city": payload.get("city", "غير محدد"),
+        "neighborhoods": payload.get("neighborhoods", []) or [],
+        "budget_min": payload.get("budget_min"),
+        "budget_max": payload.get("budget_max"),
+        "area_min": payload.get("area_min"),
+        "area_max": payload.get("area_max"),
+        "additional_requirements": payload.get("additional_requirements", ""),
+        "action_plan": payload.get("action_plan", ""),
+        "reminder_type": payload.get("reminder_type"),
+        "deadline_at": payload.get("deadline_at"),
+        "reminder_before_minutes": int(payload.get("reminder_before_minutes", 120) or 120),
+        "reminder_sent_at": payload.get("reminder_sent_at"),
+        "follow_up_details": payload.get("follow_up_details"),
+        "status": payload.get("status", "new"),
+        "created_at": now,
+        "updated_at": now,
+    }
+    result = await client_request_collection.insert_one(doc)
+    saved = await client_request_collection.find_one({"_id": result.inserted_id})
+    return client_request_helper(saved or doc)
+
+
+async def get_client_requests_db(owner_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    async for row in client_request_collection.find({"owner_id": owner_id}).sort("_id", -1).limit(limit):
+        items.append(client_request_helper(row))
+    return items
+
+
+async def update_client_request_db(owner_id: str, request_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    try:
+        oid = ObjectId(request_id)
+    except InvalidId:
+        return None
+    if not updates:
+        found = await client_request_collection.find_one({"_id": oid, "owner_id": owner_id})
+        return client_request_helper(found) if found else None
+    updates["updated_at"] = datetime.utcnow()
+    updated = await client_request_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    return client_request_helper(updated) if updated else None
+
+
+async def get_client_request_by_id_db(owner_id: str, request_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        oid = ObjectId(request_id)
+    except InvalidId:
+        return None
+    found = await client_request_collection.find_one({"_id": oid, "owner_id": owner_id})
+    return client_request_helper(found) if found else None
+
+
+async def delete_client_request_db(owner_id: str, request_id: str) -> bool:
+    try:
+        oid = ObjectId(request_id)
+    except InvalidId:
+        return False
+    result = await client_request_collection.delete_one({"_id": oid, "owner_id": owner_id})
+    return result.deleted_count == 1
+
+
+# ===== Client Request Notes =====
+
+
+def client_note_helper(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert DB document to API response format."""
+    return {
+        "id": str(item.get("_id", "")),
+        "request_id": item.get("request_id", ""),
+        "owner_id": item.get("owner_id", ""),
+        "content": item.get("content", ""),
+        "author_name": item.get("author_name", ""),
+        "author_role": item.get("author_role", "owner"),
+        "color": item.get("color", "#3f7d3c"),
+        "created_at": item.get("created_at"),
+    }
+
+
+async def create_client_note_db(owner_id: str, request_id: str, note_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new note for a client request."""
+    doc = {
+        "owner_id": owner_id,
+        "request_id": request_id,
+        "content": note_data.get("content", ""),
+        "author_name": note_data.get("author_name", "غير محدد"),
+        "author_role": note_data.get("author_role", "owner"),
+        "color": note_data.get("color", "#3f7d3c"),
+        "created_at": datetime.utcnow(),
+    }
+    result = await client_request_notes_collection.insert_one(doc)
+    saved = await client_request_notes_collection.find_one({"_id": result.inserted_id})
+    return client_note_helper(saved or doc)
+
+
+async def get_client_notes_db(owner_id: str, request_id: str) -> List[Dict[str, Any]]:
+    """Get all notes for a client request."""
+    items = []
+    async for row in client_request_notes_collection.find(
+        {"owner_id": owner_id, "request_id": request_id}
+    ).sort("created_at", -1):
+        items.append(client_note_helper(row))
+    return items
+
+
+async def update_client_note_db(owner_id: str, note_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update a client note."""
+    try:
+        oid = ObjectId(note_id)
+    except InvalidId:
+        return None
+    if not updates:
+        found = await client_request_notes_collection.find_one({"_id": oid, "owner_id": owner_id})
+        return client_note_helper(found) if found else None
+    updates["updated_at"] = datetime.utcnow()
+    updated = await client_request_notes_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    return client_note_helper(updated) if updated else None
+
+
+async def delete_client_note_db(owner_id: str, note_id: str) -> bool:
+    """Delete a client note."""
+    try:
+        oid = ObjectId(note_id)
+    except InvalidId:
+        return False
+    result = await client_request_notes_collection.delete_one({"_id": oid, "owner_id": owner_id})
+    return result.deleted_count == 1
+
+
+async def enqueue_deadline_notification_db(owner_id: str, request_item: Dict[str, Any]) -> None:
+    """
+    Queue a reminder event once when request deadline is close.
+    Email sending will be connected later by a worker.
+    """
+    request_id = request_item.get("id")
+    deadline_at = request_item.get("deadline_at")
+    reminder_sent_at = request_item.get("reminder_sent_at")
+    if not request_id or not isinstance(deadline_at, datetime) or reminder_sent_at:
+        return
+    reminder_before_minutes = int(request_item.get("reminder_before_minutes", 120) or 120)
+    trigger_time = deadline_at - timedelta(minutes=reminder_before_minutes)
+    if datetime.utcnow() < trigger_time:
+        return
+
+    doc = {
+        "owner_id": owner_id,
+        "type": "client_deadline_reminder",
+        "client_request_id": request_id,
+        "deadline_at": deadline_at,
+        "triggered_at": datetime.utcnow(),
+        "status": "pending",
+        "payload": {
+            "client_name": request_item.get("client_name"),
+            "phone_number": request_item.get("phone_number"),
+            "reminder_type": request_item.get("reminder_type"),
+            "action_plan": request_item.get("action_plan"),
+        },
+    }
+    await notification_queue_collection.update_one(
+        {
+            "type": "client_deadline_reminder",
+            "owner_id": owner_id,
+            "client_request_id": request_id,
+            "deadline_at": deadline_at,
+        },
+        {"$setOnInsert": doc},
+        upsert=True,
+    )
+    await update_client_request_db(
+        owner_id,
+        request_id,
+        {"reminder_sent_at": datetime.utcnow()},
+    )
+
+
+# ===== Client Offers (Properties assigned to clients) =====
+
+
+def client_offer_helper(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert DB document to API response format."""
+    _id = item.get("_id")
+    return {
+        "id": str(_id) if _id is not None else "",
+        "owner_id": item.get("owner_id", ""),
+        "client_name": item.get("client_name", "غير محدد"),
+        "phone_number": item.get("phone_number"),
+        "property_id": item.get("property_id", ""),
+        "status": item.get("status", "active"),
+        "notes": item.get("notes", ""),
+        "reminder_type": item.get("reminder_type"),
+        "deadline_at": item.get("deadline_at"),
+        "reminder_before_minutes": item.get("reminder_before_minutes", 120),
+        "follow_up_details": item.get("follow_up_details"),
+        "created_at": item.get("created_at") or datetime.utcnow(),
+    }
+
+
+async def create_client_offer_db(owner_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new client offer (link a property to a client)."""
+    doc = {
+        "owner_id": owner_id,
+        "client_name": payload.get("client_name", "غير محدد"),
+        "phone_number": payload.get("phone_number"),
+        "property_id": payload.get("property_id", ""),
+        "status": payload.get("status", "new"),  # Default to "new" for new offers
+        "notes": payload.get("notes", ""),
+        "reminder_type": payload.get("reminder_type"),
+        "deadline_at": payload.get("deadline_at"),
+        "reminder_before_minutes": payload.get("reminder_before_minutes", 120),
+        "follow_up_details": payload.get("follow_up_details"),
+        "created_at": datetime.utcnow(),
+    }
+    result = await client_offer_collection.insert_one(doc)
+    saved = await client_offer_collection.find_one({"_id": result.inserted_id})
+    return client_offer_helper(saved or doc)
+
+
+async def get_client_offers_db(owner_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+    """Get all client offers for an owner."""
+    items: List[Dict[str, Any]] = []
+    async for row in client_offer_collection.find({"owner_id": owner_id}).sort("_id", -1).limit(limit):
+        items.append(client_offer_helper(row))
+    return items
+
+
+async def get_client_offers_by_client_db(
+    owner_id: str, client_name: str, phone_number: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Get all offers for a specific client (case-insensitive client name matching)."""
+    # Use case-insensitive regex for client_name matching
+    query: Dict[str, Any] = {
+        "owner_id": owner_id,
+        "client_name": {"$regex": f"^{client_name}$", "$options": "i"}
+    }
+    if phone_number:
+        query["phone_number"] = {"$regex": f"^{phone_number}$", "$options": "i"}
+    items: List[Dict[str, Any]] = []
+    async for row in client_offer_collection.find(query).sort("_id", -1):
+        items.append(client_offer_helper(row))
+    return items
+
+
+async def get_client_offer_by_id_db(owner_id: str, offer_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single client offer by ID for an owner."""
+    try:
+        oid = ObjectId(offer_id)
+    except InvalidId:
+        return None
+    found = await client_offer_collection.find_one({"_id": oid, "owner_id": owner_id})
+    return client_offer_helper(found) if found else None
+
+
+async def update_client_offer_db(
+    owner_id: str, offer_id: str, updates: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Update a client offer."""
+    try:
+        oid = ObjectId(offer_id)
+    except InvalidId:
+        return None
+    if not updates:
+        found = await client_offer_collection.find_one({"_id": oid, "owner_id": owner_id})
+        return client_offer_helper(found) if found else None
+    updated = await client_offer_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    return client_offer_helper(updated) if updated else None
+
+
+async def delete_client_offer_db(owner_id: str, offer_id: str) -> bool:
+    """Delete a client offer."""
+    try:
+        oid = ObjectId(offer_id)
+    except InvalidId:
+        return False
+    result = await client_offer_collection.delete_one({"_id": oid, "owner_id": owner_id})
+    return result.deleted_count == 1
+
+
+# ===== Client Offer Notes DB functions =====
+
+client_offer_note_collection = database.get_collection("client_offer_notes")
+
+
+def client_offer_note_helper(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Transform a client offer note document for API responses."""
+    return {
+        "id": str(item.get("_id")),
+        "offer_id": item.get("offer_id"),
+        "request_id": "",  # Client offer notes don't have request_id, use offer_id instead
+        "owner_id": item.get("owner_id"),
+        "content": item.get("content", ""),
+        "author_name": item.get("author_name", "غير محدد"),
+        "author_role": item.get("author_role", "owner"),
+        "color": item.get("color", "#3f7d3c"),
+        "created_at": item.get("created_at"),
+    }
+
+
+async def create_client_offer_note_db(owner_id: str, offer_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a note for a client offer."""
+    doc = {
+        **payload,
+        "owner_id": owner_id,
+        "offer_id": offer_id,
+        "author_name": payload.get("author_name", "غير محدد"),
+        "author_role": payload.get("author_role", "owner"),
+        "color": payload.get("color", "#cfd6cf"),
+        "created_at": datetime.utcnow(),
+    }
+    result = await client_offer_note_collection.insert_one(doc)
+    saved = await client_offer_note_collection.find_one({"_id": result.inserted_id})
+    return client_offer_note_helper(saved or doc)
+
+
+async def get_client_offer_notes_db(offer_id: str) -> List[Dict[str, Any]]:
+    """Get all notes for a client offer."""
+    items: List[Dict[str, Any]] = []
+    async for row in client_offer_note_collection.find({"offer_id": offer_id}).sort("created_at", -1):
+        items.append(client_offer_note_helper(row))
+    return items
+
+
+async def update_client_offer_note_db(owner_id: str, note_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update a client offer note."""
+    try:
+        nid = ObjectId(note_id)
+    except InvalidId:
+        return None
+    # Build update document
+    update_doc = {k: v for k, v in updates.items() if v is not None}
+    if not update_doc:
+        return None
+    updated = await client_offer_note_collection.find_one_and_update(
+        {"_id": nid, "owner_id": owner_id},
+        {"$set": update_doc},
+        return_document=ReturnDocument.AFTER,
+    )
+    return client_offer_note_helper(updated) if updated else None
+
+
+async def delete_client_offer_note_db(owner_id: str, note_id: str) -> bool:
+    """Delete a client offer note."""
+    try:
+        nid = ObjectId(note_id)
+    except InvalidId:
+        return False
+    result = await client_offer_note_collection.delete_one({"_id": nid, "owner_id": owner_id})
+    return result.deleted_count == 1
+
+
+# ===== Client Profiles (independent from requests/offers) =====
+
+
+def client_profile_helper(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert DB document to API response format."""
+    _id = item.get("_id")
+    return {
+        "id": str(_id) if _id is not None else "",
+        "owner_id": item.get("owner_id", ""),
+        "client_name": item.get("client_name", ""),
+        "phone_number": item.get("phone_number"),
+        "notes": item.get("notes", ""),
+        "client_types": item.get("client_types") or [],
+        "assigned_user_id": item.get("assigned_user_id"),
+        "assigned_user_name": item.get("assigned_user_name"),
+        "created_at": item.get("created_at") or datetime.utcnow(),
+        "updated_at": item.get("updated_at") or datetime.utcnow(),
+    }
+
+
+async def create_client_profile_db(owner_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new client profile (independent from requests/offers)."""
+    now = datetime.utcnow()
+    doc = {
+        "owner_id": owner_id,
+        "client_name": payload.get("client_name", ""),
+        "phone_number": payload.get("phone_number"),
+        "notes": payload.get("notes", ""),
+        "client_types": payload.get("client_types") or [],
+        "assigned_user_id": payload.get("assigned_user_id"),
+        "assigned_user_name": payload.get("assigned_user_name"),
+        "created_at": now,
+        "updated_at": now,
+    }
+    result = await client_profile_collection.insert_one(doc)
+    saved = await client_profile_collection.find_one({"_id": result.inserted_id})
+    return client_profile_helper(saved or doc)
+
+
+async def get_client_profiles_db(
+    owner_id: str, 
+    limit: int = 200, 
+    client_type_filter: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Get client profiles for an owner, optionally filtered by client_type.
+    
+    Args:
+        owner_id: The owner user ID
+        limit: Maximum number of profiles to return
+        client_type_filter: If provided, only return profiles with this type in client_types
+                         "request" -> profiles with "request" in client_types
+                         "offer" -> profiles with "offer" in client_types
+    """
+    query: Dict[str, Any] = {"owner_id": owner_id}
+    
+    if client_type_filter in ("request", "offer"):
+        query["client_types"] = {"$in": [client_type_filter]}
+    
+    items: List[Dict[str, Any]] = []
+    async for row in client_profile_collection.find(query).sort("_id", -1).limit(limit):
+        items.append(client_profile_helper(row))
+    return items
+
+
+async def get_client_profile_by_id_db(owner_id: str, profile_id: str) -> Optional[Dict[str, Any]]:
+    """Get a client profile by ID."""
+    try:
+        oid = ObjectId(profile_id)
+    except InvalidId:
+        return None
+    found = await client_profile_collection.find_one({"_id": oid, "owner_id": owner_id})
+    return client_profile_helper(found) if found else None
+
+
+async def update_client_profile_db(
+    owner_id: str, profile_id: str, updates: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Update a client profile."""
+    try:
+        oid = ObjectId(profile_id)
+    except InvalidId:
+        return None
+    if not updates:
+        found = await client_profile_collection.find_one({"_id": oid, "owner_id": owner_id})
+        return client_profile_helper(found) if found else None
+    updates["updated_at"] = datetime.utcnow()
+    updated = await client_profile_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    return client_profile_helper(updated) if updated else None
+
+
+async def delete_client_profile_db(owner_id: str, profile_id: str) -> bool:
+    """Delete a client profile."""
+    try:
+        oid = ObjectId(profile_id)
+    except InvalidId:
+        return False
+    result = await client_profile_collection.delete_one({"_id": oid, "owner_id": owner_id})
+    return result.deleted_count == 1
+
+
+async def get_client_profiles_by_type_db(owner_id: str, client_type: str, limit: int = 200) -> List[Dict[str, Any]]:
+    """
+    Get client profiles filtered by client_type.
+    client_type should be "request" or "offer".
+    """
+    query: Dict[str, Any] = {"owner_id": owner_id}
+    if client_type in ("request", "offer"):
+        query["client_types"] = {"$in": [client_type]}
+    
+    items: List[Dict[str, Any]] = []
+    async for row in client_profile_collection.find(query).sort("_id", -1).limit(limit):
+        items.append(client_profile_helper(row))
+    return items
+
+
+async def find_client_profile_by_name_db(
+    owner_id: str, 
+    client_name: str, 
+    phone_number: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Find a client profile by name and phone number (case-insensitive).
+    """
+    query: Dict[str, Any] = {
+        "owner_id": owner_id,
+        "client_name": {"$regex": f"^{client_name}$", "$options": "i"}
+    }
+    if phone_number:
+        query["phone_number"] = {"$regex": f"^{phone_number}$", "$options": "i"}
+    
+    found = await client_profile_collection.find_one(query)
+    return client_profile_helper(found) if found else None
+
+
+async def add_client_type_to_profile_db(
+    owner_id: str, 
+    profile_id: str, 
+    client_type: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Add a client type to existing profile (merge types).
+    """
+    try:
+        oid = ObjectId(profile_id)
+    except InvalidId:
+        return None
+    
+    # Get current profile to check existing types
+    current = await client_profile_collection.find_one({"_id": oid, "owner_id": owner_id})
+    if not current:
+        return None
+    
+    current_types = current.get("client_types") or []
+    if client_type not in current_types:
+        current_types.append(client_type)
+    
+    updated = await client_profile_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": {"client_types": current_types, "updated_at": datetime.utcnow()}},
+        return_document=ReturnDocument.AFTER,
+    )
+    return client_profile_helper(updated) if updated else None
+
+
+async def get_or_create_client_profile_with_type_db(
+    owner_id: str, 
+    client_name: str, 
+    phone_number: Optional[str],
+    client_type: str
+) -> Dict[str, Any]:
+    """
+    Find existing client profile or create new one with specified client_type.
+    If profile exists, merge the new type (don't overwrite existing types).
+    """
+    # Build query for finding existing profile
+    query: Dict[str, Any] = {
+        "owner_id": owner_id,
+        "client_name": {"$regex": f"^{client_name}$", "$options": "i"}
+    }
+    if phone_number:
+        query["phone_number"] = {"$regex": f"^{phone_number}$", "$options": "i"}
+    
+    # Try to find existing profile
+    existing = await client_profile_collection.find_one(query)
+    if existing:
+        # Profile exists - merge the new client_type
+        current_types = existing.get("client_types") or []
+        if client_type not in current_types:
+            current_types.append(client_type)
+            await client_profile_collection.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"client_types": current_types, "updated_at": datetime.utcnow()}}
+            )
+        return client_profile_helper(existing)
+    
+    # Create new profile with the client_type
+    now = datetime.utcnow()
+    doc = {
+        "owner_id": owner_id,
+        "client_name": client_name,
+        "phone_number": phone_number,
+        "notes": "",
+        "client_types": [client_type],
+        "assigned_user_id": None,
+        "assigned_user_name": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    result = await client_profile_collection.insert_one(doc)
+    saved = await client_profile_collection.find_one({"_id": result.inserted_id})
+    return client_profile_helper(saved or doc)
+
+
+async def get_client_profiles_by_type_db(
+    owner_id: str, 
+    client_type: str,
+    limit: int = 200
+) -> List[Dict[str, Any]]:
+    """
+    Get client profiles filtered by client_type.
+    client_type: "request" or "offer"
+    Returns profiles where client_types includes the type.
+    """
+    query: Dict[str, Any] = {"owner_id": owner_id}
+    if client_type in ("request", "offer"):
+        query["client_types"] = {"$in": [client_type]}
+    
+    items: List[Dict[str, Any]] = []
+    async for row in client_profile_collection.find(query).sort("_id", -1).limit(limit):
+        items.append(client_profile_helper(row))
+    return items
+
+
+# ===== Appointments =====
+
+appointment_collection = database.get_collection("appointments")
+
+
+def appointment_helper(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert DB document to API response format."""
+    _id = item.get("_id")
+    return {
+        "id": str(_id) if _id is not None else "",
+        "type": item.get("type", "request"),
+        "client_name": item.get("client_name", "غير محدد"),
+        "phone_number": item.get("phone_number"),
+        "property_type": item.get("property_type"),
+        "city": item.get("city"),
+        "neighborhood": item.get("neighborhood"),
+        "property_id": item.get("property_id"),
+        "reminder_type": item.get("reminder_type"),
+        "deadline_at": item.get("deadline_at"),
+        "reminder_before_minutes": int(item.get("reminder_before_minutes", 120) or 120),
+        "follow_up_details": item.get("follow_up_details"),
+        "status": item.get("status", "active"),
+        "created_at": item.get("created_at") or datetime.utcnow(),
+        "source_id": item.get("source_id"),
+    }
+
+
+async def create_appointment_db(owner_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new appointment from client request or offer."""
+    doc = {
+        "owner_id": owner_id,
+        "type": payload.get("type", "request"),
+        "client_name": payload.get("client_name", "غير محدد"),
+        "phone_number": payload.get("phone_number"),
+        "property_type": payload.get("property_type"),
+        "city": payload.get("city"),
+        "neighborhood": payload.get("neighborhood"),
+        "property_id": payload.get("property_id"),
+        "reminder_type": payload.get("reminder_type"),
+        "deadline_at": payload.get("deadline_at"),
+        "reminder_before_minutes": int(payload.get("reminder_before_minutes", 120) or 120),
+        "follow_up_details": payload.get("follow_up_details"),
+        "status": "active",
+        "source_id": payload.get("source_id"),
+        "created_at": datetime.utcnow(),
+    }
+    result = await appointment_collection.insert_one(doc)
+    saved = await appointment_collection.find_one({"_id": result.inserted_id})
+    return appointment_helper(saved or doc)
+
+
+async def get_appointments_db(
+    owner_id: str,
+    limit: int = 200,
+    date_filter: Optional[str] = None,
+    employee_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Get appointments for an owner with optional filters."""
+    query: Dict[str, Any] = {"owner_id": owner_id}
+    
+    # Filter by date
+    if date_filter == "today":
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+        query["deadline_at"] = {"$gte": today_start, "$lt": today_end}
+    elif date_filter == "this_week":
+        today = datetime.utcnow().date()
+        week_start = today - timedelta(days=today.weekday())
+        week_end = week_start + timedelta(days=7)
+        query["deadline_at"] = {
+            "$gte": datetime.combine(week_start, datetime.min.time()),
+            "$lt": datetime.combine(week_end, datetime.min.time())
+        }
+    elif date_filter == "delayed":
+        query["deadline_at"] = {"$lt": datetime.utcnow()}
+        query["status"] = "active"
+    
+    # Filter by employee
+    if employee_id:
+        query["assigned_user_id"] = employee_id
+    
+    items: List[Dict[str, Any]] = []
+    async for row in appointment_collection.find(query).sort("deadline_at", 1).limit(limit):
+        items.append(appointment_helper(row))
+    return items
+
+
+async def get_appointment_by_id_db(owner_id: str, appointment_id: str) -> Optional[Dict[str, Any]]:
+    """Get an appointment by ID."""
+    try:
+        oid = ObjectId(appointment_id)
+    except InvalidId:
+        return None
+    found = await appointment_collection.find_one({"_id": oid, "owner_id": owner_id})
+    return appointment_helper(found) if found else None
+
+
+async def update_appointment_db(
+    owner_id: str, appointment_id: str, updates: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Update an appointment."""
+    try:
+        oid = ObjectId(appointment_id)
+    except InvalidId:
+        return None
+    if not updates:
+        found = await appointment_collection.find_one({"_id": oid, "owner_id": owner_id})
+        return appointment_helper(found) if found else None
+    updated = await appointment_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    return appointment_helper(updated) if updated else None
+
+
+async def delete_appointment_db(owner_id: str, appointment_id: str) -> bool:
+    """Delete an appointment."""
+    try:
+        oid = ObjectId(appointment_id)
+    except InvalidId:
+        return False
+    result = await appointment_collection.delete_one({"_id": oid, "owner_id": owner_id})
+    return result.deleted_count == 1

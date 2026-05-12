@@ -19,6 +19,7 @@ import {
   message,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
+import { ArrowRightOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getCurrentUser,
@@ -210,7 +211,9 @@ const PlatformAdminPage: React.FC = () => {
           </Title>
           <Text type="secondary">نظرة تفصيلية على الحسابات، الاشتراكات، العقارات، والموظفين</Text>
         </div>
-        <Button onClick={() => navigate('/app')}>العودة للوحة التحكم</Button>
+        <Button icon={<ArrowRightOutlined />} onClick={() => navigate(-1)}>
+          رجوع
+        </Button>
       </div>
 
       <Row gutter={[12, 12]}>

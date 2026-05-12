@@ -13,26 +13,45 @@ import {
   message,
   Table,
   Tag,
+  Select,
   Switch,
   Modal,
   Space,
   Avatar,
   Tabs,
+  Row,
+  Col,
+  Statistic,
 } from 'antd';
-import { UploadOutlined, ArrowRightOutlined, UserAddOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import {
+  UploadOutlined,
+  ArrowRightOutlined,
+  UserAddOutlined,
+  ExclamationCircleOutlined,
+  HomeOutlined,
+  CreditCardOutlined,
+  SettingOutlined,
+  LinkOutlined,
+  TeamOutlined,
+  SafetyCertificateOutlined,
+  CrownOutlined,
+  CheckCircleOutlined,
+  ApartmentOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 import {
   getCurrentUser,
   getSettingsOverview,
   updateCompanySettings,
-  checkSubdomainAvailability,
+checkSubdomainAvailability,
   updateSubdomain,
+  updateMyDisplayName,
   createEmployeeUser,
   updateEmployeeUser,
   createStripePortalSession,
   startFreeTrial,
-  uploadFile,
+uploadFile,
   resolveMediaUrl,
   type UserPublic,
   type PlanInfo,
@@ -46,33 +65,97 @@ const { Title, Text } = Typography;
 
 type SettingsSectionKey = 'plans' | 'account' | 'subdomain' | 'users' | 'roles' | 'billing';
 
+const palette = {
+  pageBg: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)',
+  surface: 'rgba(255, 255, 255, 0.98)',
+  card: '#ffffff',
+  border: '#e4e7df',
+  text: '#294231',
+  muted: '#6d7d72',
+  accent: '#3f7d3c',
+  accentSoft: '#edf5e9',
+  gold: '#b7791f',
+  danger: '#b42318',
+};
+
+const sectionMeta: Record<SettingsSectionKey, { title: string; description: string; icon: React.ReactNode }> = {
+  plans: {
+    title: 'الخطط والاشتراكات',
+    description: 'راقب حدود الاستخدام، فعّل التجربة، أو انتقل لخطة تناسب نمو مكتبك.',
+    icon: <CrownOutlined />,
+  },
+  account: {
+    title: 'إعدادات الحساب',
+    description: 'بيانات المكتب، الشعار، واسم المستخدم الذي يظهر في الملاحظات.',
+    icon: <SettingOutlined />,
+  },
+  subdomain: {
+    title: 'السب دومين',
+    description: 'احجز رابطًا عامًا منظما لصفحات عروض مكتبك.',
+    icon: <LinkOutlined />,
+  },
+  users: {
+    title: 'المستخدمون والموظفون',
+    description: 'أضف فريقك واضبط حالة كل مستخدم وصلاحياته.',
+    icon: <TeamOutlined />,
+  },
+  roles: {
+    title: 'الأدوار والصلاحيات',
+    description: 'نظرة سريعة على صلاحيات المالك والموظفين.',
+    icon: <SafetyCertificateOutlined />,
+  },
+  billing: {
+    title: 'الفوترة',
+    description: 'إدارة وسيلة الدفع والإلغاء والترقية تتم عبر بوابة Stripe.',
+    icon: <CreditCardOutlined />,
+  },
+};
+
+const roleLabel = (role?: TeamUser['role']) => {
+  if (role === 'owner') return 'مالك الحساب';
+  if (role === 'manager') return 'مدير';
+  return 'موظف';
+};
+
+const roleColor = (role?: TeamUser['role']) => {
+  if (role === 'owner') return 'gold';
+  if (role === 'manager') return 'green';
+  return 'blue';
+};
+
 const PLANS: PlanInfo[] = [
   {
     key: 'starter',
-    name: 'خطة المكاتب الصغيرة',
+    name: 'مبتدئ',
     max_users: 3,
-    max_properties: 100,
+    max_properties: 60,
     max_storage_mb: 2048,
     allow_custom_subdomain: false,
     price_monthly_sar: 99,
+    description: 'مناسبة للمكاتب الصغيرة والمتوسطة',
+    badge: null,
   },
   {
     key: 'business',
-    name: 'خطة المكاتب المتوسطة',
-    max_users: 10,
-    max_properties: 500,
+    name: 'احترافي',
+    max_users: 8,
+    max_properties: 120,
     max_storage_mb: 10240,
     allow_custom_subdomain: true,
-    price_monthly_sar: 249,
+    price_monthly_sar: 199,
+    description: 'للمكاتب العقارية الجادة والفرق',
+    badge: 'الأكثر استخدامًا',
   },
   {
     key: 'enterprise',
-    name: 'خطة الشركات',
-    max_users: 50,
-    max_properties: 5000,
+    name: 'مؤسسات',
+    max_users: 999999,
+    max_properties: 999999,
     max_storage_mb: 102400,
     allow_custom_subdomain: true,
     price_monthly_sar: 799,
+    description: 'للشركات والفرق الكبيرة',
+    badge: 'للشركات',
   },
 ];
 
@@ -105,7 +188,9 @@ const SettingsPage: React.FC = () => {
   const [planUsage, setPlanUsage] = useState<PlanUsage>(dummyPlan);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(dummyCompany);
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>(dummyTeam);
-  const [savingAccount, setSavingAccount] = useState(false);
+const [savingAccount, setSavingAccount] = useState(false);
+const [savingDisplayName, setSavingDisplayName] = useState(false);
+  const [displayName, setDisplayName] = useState<string>('');
   const [checkingSubdomain, setCheckingSubdomain] = useState(false);
   const [subdomain, setSubdomain] = useState<string>('');
   const [subdomainStatus, setSubdomainStatus] = useState<null | { ok: boolean; message: string }>(null);
@@ -114,21 +199,26 @@ const SettingsPage: React.FC = () => {
   const [editingEmployee, setEditingEmployee] = useState<TeamUser | null>(null);
   const navigate = useNavigate();
   const [accountForm] = Form.useForm<CompanySettings>();
-  const [employeeForm] = Form.useForm<{
+const [employeeForm] = Form.useForm<{
     email: string;
     password?: string;
+    role: 'manager' | 'employee';
+    display_name?: string;
     can_add_property: boolean;
     can_edit_property: boolean;
     can_delete_property: boolean;
     can_manage_files: boolean;
     status?: 'active' | 'disabled';
   }>();
+  const selectedEmployeeRole = Form.useWatch('role', employeeForm);
+  const isManagerRoleSelected = selectedEmployeeRole === 'manager';
 
   useEffect(() => {
     const init = async () => {
       try {
-        const user = await getCurrentUser();
+const user = await getCurrentUser();
         setCurrentUser(user);
+        setDisplayName(user.display_name || '');
 
         const overview = await getSettingsOverview();
         setPlanUsage(overview.plan_usage);
@@ -175,9 +265,24 @@ const SettingsPage: React.FC = () => {
         logo_url,
       });
       setCompanySettings(updated);
-      message.success('تم حفظ إعدادات الحساب بنجاح.');
+message.success('تم حفظ إعدادات الحساب بنجاح.');
     } finally {
       setSavingAccount(false);
+    }
+  };
+
+  const handleSaveDisplayName = async () => {
+    try {
+      setSavingDisplayName(true);
+      const trimmed = displayName.trim() || null;
+      const updated = await updateMyDisplayName(trimmed);
+      setCurrentUser(updated);
+      message.success('تم حفظ اسم المستخدم بنجاح.');
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || 'فشل في حفظ اسم المستخدم.';
+      message.error(detail);
+    } finally {
+      setSavingDisplayName(false);
     }
   };
 
@@ -221,18 +326,24 @@ const SettingsPage: React.FC = () => {
   };
 
   const userColumns: ColumnsType<TeamUser> = [
-    {
+{
       title: 'البريد الإلكتروني',
       dataIndex: 'email',
       key: 'email',
+    },
+    {
+      title: 'الاسم',
+      dataIndex: 'display_name',
+      key: 'display_name',
+      render: (name: string | null | undefined) => name || '-',
     },
     {
       title: 'الدور',
       dataIndex: 'role',
       key: 'role',
       render: (role: TeamUser['role']) => (
-        <Tag color={role === 'owner' ? 'gold' : 'blue'}>
-          {role === 'owner' ? 'مالك الحساب' : 'موظف'}
+        <Tag color={roleColor(role)}>
+          {roleLabel(role)}
         </Tag>
       ),
     },
@@ -257,13 +368,15 @@ const SettingsPage: React.FC = () => {
             onClick={() => {
               setEditingEmployee(record);
               const perms = record.permissions || {};
-              employeeForm.setFieldsValue({
+employeeForm.setFieldsValue({
                 email: record.email,
+                role: record.role === 'manager' ? 'manager' : 'employee',
+                display_name: record.display_name || '',
                 status: record.status,
-                can_add_property: perms.can_add_property ?? true,
-                can_edit_property: perms.can_edit_property ?? true,
-                can_delete_property: perms.can_delete_property ?? false,
-                can_manage_files: perms.can_manage_files ?? true,
+                can_add_property: record.role === 'manager' ? true : perms.can_add_property ?? true,
+                can_edit_property: record.role === 'manager' ? true : perms.can_edit_property ?? true,
+                can_delete_property: record.role === 'manager' ? true : perms.can_delete_property ?? false,
+                can_manage_files: record.role === 'manager' ? true : perms.can_manage_files ?? true,
               });
               setIsEmployeeModalVisible(true);
             }}
@@ -302,8 +415,6 @@ const SettingsPage: React.FC = () => {
     const effectiveSubscribedPlanKey = companySettings.plan_key || planUsage.plan.key;
     const hasSubscription = !!companySettings.is_subscribed;
     const canStartTrial = !hasSubscription && !companySettings.trial_used;
-
-    // حساب قيم تبويب حالة الاشتراك
     const startedAt = companySettings.subscription_started_at
       ? new Date(companySettings.subscription_started_at)
       : null;
@@ -320,216 +431,263 @@ const SettingsPage: React.FC = () => {
       remainingDays = Math.max(0, Math.round(remainingMs / (1000 * 60 * 60 * 24)));
     }
 
-    const remainingUsers =
-      planUsage.plan.max_users - planUsage.current_users > 0
-        ? planUsage.plan.max_users - planUsage.current_users
-        : 0;
-    const remainingProperties =
-      planUsage.plan.max_properties - planUsage.current_properties > 0
-        ? planUsage.plan.max_properties - planUsage.current_properties
-        : 0;
+    const remainingUsers = Math.max(0, planUsage.plan.max_users - planUsage.current_users);
+    const remainingProperties = Math.max(0, planUsage.plan.max_properties - planUsage.current_properties);
+    const storageLimit = planUsage.plan.max_storage_mb || 0;
+    const storageUsed = planUsage.used_storage_mb || 0;
+    const storagePercent = storageLimit ? Math.min(100, Math.round((storageUsed / storageLimit) * 100)) : 0;
+    const userPercent = Math.min(100, Math.round((planUsage.current_users / planUsage.plan.max_users) * 100));
+    const propertyPercent = Math.min(100, Math.round((planUsage.current_properties / planUsage.plan.max_properties) * 100));
 
-    const plansContent = (
-      <>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <Title level={4} style={{ margin: 0 }}>
-            الخطط والاشتراكات
-          </Title>
-          <Space>
-            {hasSubscription && (
-              <Tag color={companySettings.billing_status === 'active' ? 'green' : 'orange'}>
-                حالة Stripe: {companySettings.billing_status || 'غير معروفة'}
-                {companySettings.cancel_at_period_end ? ' (سيتم الإلغاء نهاية الفترة)' : ''}
-              </Tag>
-            )}
-            {hasSubscription && (
-              <Button
-                onClick={async () => {
-                  try {
-                    const portal = await createStripePortalSession(
-                      `${window.location.origin}/settings`,
-                    );
-                    window.location.href = portal.url;
-                  } catch (e: any) {
-                    const detail =
-                      e?.response?.data?.detail || 'تعذّر فتح بوابة إدارة الفوترة.';
-                    message.error(detail);
-                  }
-                }}
-              >
-                إدارة الاشتراك (Stripe)
-              </Button>
-            )}
-          </Space>
-        </div>
+    const formatStorage = (mb?: number | null) => {
+      if (!mb) return '0 م.ب';
+      return mb >= 1024 ? `${(mb / 1024).toLocaleString('ar-SA', { maximumFractionDigits: 1 })} ج.ب` : `${mb.toLocaleString('ar-SA')} م.ب`;
+    };
 
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
-          {PLANS.map((plan) => {
-            const isCurrent = plan.key === effectiveSubscribedPlanKey;
-            const canStartTrialForThisPlan = canStartTrial && plan.key === 'starter';
-            return (
-              <Card
-                key={plan.key}
-                style={{
-                  width: 260,
-                  borderColor: isCurrent ? '#1890ff' : undefined,
-                }}
-                title={plan.name}
-                extra={
-                  plan.price_monthly_sar != null ? (
-                    <Text strong>
-                      {plan.price_monthly_sar.toLocaleString('ar-SA')} ر.س / شهر
-                    </Text>
-                  ) : null
-                }
-              >
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <Text>حتى {plan.max_users} مستخدم</Text>
-                  <Text>حتى {plan.max_properties} عقار</Text>
-                  {plan.max_storage_mb && (
-                    <Text>تخزين حتى {(plan.max_storage_mb / 1024).toFixed(1)} جيجابايت تقريبًا</Text>
-                  )}
-                  <Text>
-                    سب دومين مخصص:{' '}
-                    <Text strong type={plan.allow_custom_subdomain ? 'success' : 'secondary'}>
-                      {plan.allow_custom_subdomain ? 'مدعوم' : 'غير متاح في هذه الخطة'}
-                    </Text>
-                  </Text>
-                  <Button
-                    type={isCurrent ? 'default' : 'primary'}
-                    block
-                    disabled={isCurrent && hasSubscription}
-                    onClick={async () => {
-                      if (canStartTrialForThisPlan) {
-                        try {
-                          const updatedCompany = await startFreeTrial(plan.key);
-                          setCompanySettings(updatedCompany);
-                          const overview = await getSettingsOverview();
-                          setPlanUsage(overview.plan_usage);
-                          message.success('تم تفعيل الشهر المجاني بنجاح.');
-                        } catch (e: any) {
-                          const detail =
-                            e?.response?.data?.detail || 'تعذّر بدء التجربة المجانية.';
-                          message.error(detail);
-                        }
-                        return;
-                      }
-                      navigate(`/billing/checkout?plan=${plan.key}`);
-                    }}
-                  >
-                    {isCurrent && hasSubscription
-                      ? 'الخطة الحالية'
-                      : canStartTrialForThisPlan
-                        ? 'ابدأ الشهر المجاني'
-                        : 'اشترك الآن'}
-                  </Button>
-                </Space>
-              </Card>
-            );
-          })}
-        </div>
+    const portalButton = hasSubscription ? (
+      <Button
+        icon={<CreditCardOutlined />}
+        onClick={async () => {
+          try {
+            const portal = await createStripePortalSession(`${window.location.origin}/settings`);
+            window.location.href = portal.url;
+          } catch (e: any) {
+            const detail = e?.response?.data?.detail || 'تعذّر فتح بوابة إدارة الفوترة.';
+            message.error(detail);
+          }
+        }}
+      >
+        إدارة الفوترة
+      </Button>
+    ) : null;
 
-        {!hasSubscription && companySettings.trial_used && (
-          <div style={{ marginBottom: 16 }}>
-            <Text type="warning">
-              تم استخدام الشهر المجاني مسبقًا لهذا الحساب. يمكنك الآن اختيار خطة مدفوعة لإكمال الاستخدام.
-            </Text>
-          </div>
-        )}
-
-        <Descriptions bordered column={1} size="middle">
-          <Descriptions.Item label="الخطة الحالية">
-            {planUsage.plan.name} ({planUsage.plan.key}){' '}
-            {!companySettings.is_subscribed && <Text type="warning">(غير مفعّلة حتى الآن)</Text>}
-          </Descriptions.Item>
-          <Descriptions.Item label="حالة الفوترة">
-            {companySettings.billing_status || 'غير متوفر'}
-            {companySettings.cancel_at_period_end ? ' - سيتم الإلغاء نهاية الفترة' : ''}
-          </Descriptions.Item>
-          <Descriptions.Item label="عدد الموظفين">
-            {planUsage.current_users} / {planUsage.plan.max_users}
-          </Descriptions.Item>
-          <Descriptions.Item label="عدد العقارات">
-            {planUsage.current_properties} / {planUsage.plan.max_properties}
-          </Descriptions.Item>
-          <Descriptions.Item label="التخزين">
-            {planUsage.used_storage_mb ?? 0} / {planUsage.plan.max_storage_mb ?? 0} MB
-            <div style={{ marginTop: 8 }}>
-              <Progress
-                percent={
-                  planUsage.plan.max_storage_mb
-                    ? Math.min(
-                        100,
-                        Math.round(((planUsage.used_storage_mb || 0) / planUsage.plan.max_storage_mb) * 100),
-                      )
-                    : 0
-                }
-                size="small"
-              />
-            </div>
-          </Descriptions.Item>
-        </Descriptions>
-        <div style={{ marginTop: 16 }}>
-          <Text type="secondary">
-            عند تجاوز حدود الخطة (عدد الموظفين أو العقارات أو التخزين)، سيتم إيقاف الإضافة الجديدة حتى تتم الترقية.
-          </Text>
-        </div>
-      </>
-    );
-
-    const statusContent = (
-      <Card>
-        <Descriptions bordered column={1} size="middle">
-          <Descriptions.Item label="الخطة الحالية">
-            {planUsage.plan.name} ({planUsage.plan.key})
-          </Descriptions.Item>
-          <Descriptions.Item label="مدة الاشتراك">
-            {totalDays != null ? `${totalDays} يوم (اشتراك شهري مبدئي)` : 'اشتراك شهري (30 يوم تقريبًا)'}
-          </Descriptions.Item>
-          <Descriptions.Item label="تاريخ التفعيل">
-            {startedAt ? startedAt.toLocaleString('ar-SA') : 'غير متوفر'}
-          </Descriptions.Item>
-          <Descriptions.Item label="تاريخ الانتهاء">
-            {endsAt ? endsAt.toLocaleString('ar-SA') : 'غير متوفر'}
-          </Descriptions.Item>
-          <Descriptions.Item label="الوقت المتبقي">
-            {remainingDays != null ? `${remainingDays} يوم متبقٍ تقريبًا` : 'غير متوفر'}
-          </Descriptions.Item>
-          <Descriptions.Item label="عدد الموظفين المستخدم / الحد">
-            {planUsage.current_users} / {planUsage.plan.max_users} ({remainingUsers} متبقٍ)
-          </Descriptions.Item>
-          <Descriptions.Item label="عدد العقارات المستخدم / الحد">
-            {planUsage.current_properties} / {planUsage.plan.max_properties} ({remainingProperties} متبقٍ)
-          </Descriptions.Item>
-        </Descriptions>
-      </Card>
-    );
-
-    const items = [];
-    if (hasSubscription) {
-      items.push({
-        key: 'status',
-        label: 'حالة الاشتراك',
-        children: statusContent,
-      });
-    }
-    items.push({
-      key: 'plans',
-      label: 'الخطط المتاحة',
-      children: plansContent,
-    });
+const planFeatures = (plan: PlanInfo) => {
+      const features: string[] = [];
+      
+if (plan.key === 'starter') {
+        features.push('إدارة عقارات وعملاء ومتابعات');
+        features.push('CRM كامل');
+        features.push('المواعيد والمتابعات');
+        features.push('مشاركة العقارات');
+        features.push('دعم أساسي');
+        features.push(`حتى ${plan.max_users} مستخدمين`);
+        features.push(`حتى ${plan.max_properties} عقار`);
+        features.push('تخزين 2 ج.ب');
+} else if (plan.key === 'business') {
+        features.push('إدارة فريق وصلاحيات متقدمة');
+        features.push('Subdomain');
+        features.push('AI أعلى');
+        features.push('تقارير وإحصائيات أفضل');
+        features.push('موقع أساسي');
+        features.push(`حتى ${plan.max_users} مستخدمين`);
+        features.push(`حتى ${plan.max_properties} عقار`);
+        features.push('تخزين 10 ج.ب');
+} else if (plan.key === 'enterprise') {
+        features.push('جميع ميزات مبتدئ واحترافي');
+        features.push('تشغيل متكامل للمكتب العقاري');
+        features.push('مستخدمين بلا حدود');
+        features.push('عقارات بلا حدود');
+        features.push('أداء أعلى');
+        features.push('دعم مخصص');
+        features.push('حلول قابلة للتوسع');
+features.push('تخزين 100 ج.ب');
+      }
+      
+      return features;
+    };
 
     return (
-      <Card>
-        <Tabs defaultActiveKey={hasSubscription ? 'status' : 'plans'} items={items} />
-      </Card>
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Card
+          bordered={false}
+          style={{
+            borderRadius: 18,
+            background: `linear-gradient(135deg, ${palette.accent} 0%, #294231 100%)`,
+            boxShadow: '0 18px 40px rgba(41, 66, 49, 0.18)',
+            overflow: 'hidden',
+          }}
+          styles={{ body: { padding: 24 } }}
+        >
+          <Row gutter={[18, 18]} align="middle">
+            <Col xs={24} lg={14}>
+              <Space direction="vertical" size={10}>
+                <Tag color={hasSubscription ? 'green' : 'gold'} style={{ width: 'fit-content', borderRadius: 999 }}>
+                  {hasSubscription ? 'اشتراك مفعّل' : canStartTrial ? 'جاهز للتجربة المجانية' : 'بانتظار اختيار خطة'}
+                </Tag>
+                <Title level={2} style={{ color: '#fff', margin: 0 }}>
+                  {planUsage.plan.name}
+                </Title>
+                <Text style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14 }}>
+                  {hasSubscription
+                    ? `حالة الفوترة: ${companySettings.billing_status || 'غير متوفرة'}${companySettings.cancel_at_period_end ? ' - سيتم الإلغاء نهاية الفترة' : ''}`
+                    : companySettings.trial_used
+                      ? 'تم استخدام التجربة المجانية. اختر خطة مدفوعة لمتابعة التوسع.'
+                      : 'ابدأ التجربة أو اختر الخطة التي تناسب حجم مكتبك.'}
+                </Text>
+              </Space>
+            </Col>
+            <Col xs={24} lg={10}>
+              <Row gutter={12}>
+                <Col span={8}>
+                  <Statistic value={remainingUsers} suffix="متبقٍ" title={<span style={{ color: 'rgba(255,255,255,0.72)' }}>المستخدمون</span>} valueStyle={{ color: '#fff' }} />
+                </Col>
+                <Col span={8}>
+                  <Statistic value={remainingProperties} suffix="متبقٍ" title={<span style={{ color: 'rgba(255,255,255,0.72)' }}>العقارات</span>} valueStyle={{ color: '#fff' }} />
+                </Col>
+                <Col span={8}>
+                  <Statistic value={remainingDays ?? 30} suffix="يوم" title={<span style={{ color: 'rgba(255,255,255,0.72)' }}>الفترة</span>} valueStyle={{ color: '#fff' }} />
+                </Col>
+              </Row>
+            </Col>
+          </Row>
+        </Card>
+
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={8}>
+            <Card bordered={false} style={{ borderRadius: 16, border: `1px solid ${palette.border}` }}>
+              <Space><TeamOutlined style={{ color: palette.accent }} /><Text type="secondary">استخدام الموظفين</Text></Space>
+              <Progress percent={userPercent} strokeColor={palette.accent} style={{ marginTop: 12 }} />
+              <Text strong>{planUsage.current_users} / {planUsage.plan.max_users}</Text>
+            </Card>
+          </Col>
+          <Col xs={24} md={8}>
+            <Card bordered={false} style={{ borderRadius: 16, border: `1px solid ${palette.border}` }}>
+              <Space><ApartmentOutlined style={{ color: palette.accent }} /><Text type="secondary">استخدام العقارات</Text></Space>
+              <Progress percent={propertyPercent} strokeColor={palette.accent} style={{ marginTop: 12 }} />
+              <Text strong>{planUsage.current_properties} / {planUsage.plan.max_properties}</Text>
+            </Card>
+          </Col>
+          <Col xs={24} md={8}>
+            <Card bordered={false} style={{ borderRadius: 16, border: `1px solid ${palette.border}` }}>
+              <Text type="secondary">التخزين</Text>
+              <Progress percent={storagePercent} strokeColor={palette.accent} style={{ marginTop: 12 }} />
+              <Text strong>{formatStorage(storageUsed)} / {formatStorage(storageLimit)}</Text>
+            </Card>
+          </Col>
+        </Row>
+
+        <Card
+          bordered={false}
+          style={{ borderRadius: 18, border: `1px solid ${palette.border}` }}
+          title={<Space><CrownOutlined /> الخطط المتاحة</Space>}
+          extra={portalButton}
+        >
+          <Row gutter={[16, 16]}>
+{PLANS.map((plan) => {
+              const isCurrent = plan.key === effectiveSubscribedPlanKey;
+              const canStartTrialForThisPlan = canStartTrial && plan.key === 'starter';
+              return (
+                <Col xs={24} lg={8} key={plan.key}>
+                  <Card
+                    bordered={false}
+                    style={{
+                      minHeight: 360,
+                      borderRadius: 18,
+border: `1px solid ${isCurrent ? palette.accent : plan.key === 'business' ? '#c9b16a' : plan.key === 'enterprise' ? '#8b5cf6' : palette.border}`,
+                      background: plan.key === 'business' ? 'linear-gradient(180deg, #fffdf5 0%, #ffffff 52%)' : plan.key === 'enterprise' ? 'linear-gradient(180deg, #f5f3ff 0%, #ffffff 52%)' : '#fff',
+                      boxShadow: isCurrent || plan.key === 'business' || plan.key === 'enterprise' ? '0 18px 34px rgba(41, 66, 49, 0.12)' : '0 8px 20px rgba(41, 66, 49, 0.06)',
+                    }}
+                    styles={{ body: { display: 'flex', flexDirection: 'column', gap: 18, height: '100%' } }}
+                  >
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+<Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                        <Title level={4} style={{ margin: 0, color: palette.text }}>{plan.name}</Title>
+                        {isCurrent ? <Tag color="green">الحالية</Tag> : plan.key === 'business' ? <Tag color="gold">الأكثر استخدامًا</Tag> : plan.key === 'enterprise' ? <Tag color="purple">للشركات</Tag> : null}
+                      </Space>
+<div>
+                        <Text strong style={{ fontSize: 34, color: palette.text }}>
+                          {plan.price_monthly_sar?.toLocaleString('ar-SA')}
+                        </Text>
+                        <Text type="secondary"> ر.س / شهر</Text>
+                      </div>
+                      {plan.description && (
+                        <Text type="secondary" style={{ fontSize: 13 }}>
+                          {plan.description}
+                        </Text>
+                      )}
+                    </Space>
+
+                    <Space direction="vertical" size={10} style={{ flex: 1 }}>
+                      {planFeatures(plan).map((feature) => (
+                        <Space key={feature} align="start">
+                          <CheckCircleOutlined style={{ color: palette.accent, marginTop: 3 }} />
+                          <Text>{feature}</Text>
+                        </Space>
+                      ))}
+                    </Space>
+
+                    <Button
+                      type={isCurrent ? 'default' : 'primary'}
+                      block
+                      size="large"
+                      disabled={isCurrent && hasSubscription}
+style={{
+                        borderRadius: 12,
+                        background: isCurrent ? undefined : plan.key === 'enterprise' ? '#8b5cf6' : palette.accent,
+                      }}
+                      onClick={async () => {
+                        if (canStartTrialForThisPlan) {
+                          try {
+                            const updatedCompany = await startFreeTrial(plan.key);
+                            setCompanySettings(updatedCompany);
+                            const overview = await getSettingsOverview();
+                            setPlanUsage(overview.plan_usage);
+                            message.success('تم تفعيل الشهر المجاني بنجاح.');
+                          } catch (e: any) {
+                            const detail = e?.response?.data?.detail || 'تعذّر بدء التجربة المجانية.';
+                            message.error(detail);
+                          }
+                          return;
+                        }
+                        navigate(`/billing/checkout?plan=${plan.key}`);
+                      }}
+                    >
+                      {isCurrent && hasSubscription ? 'الخطة الحالية' : canStartTrialForThisPlan ? 'ابدأ الشهر المجاني' : 'اختيار الخطة'}
+                    </Button>
+                  </Card>
+                </Col>
+              );
+            })}
+          </Row>
+        </Card>
+
+        <Card bordered={false} style={{ borderRadius: 18, border: `1px solid ${palette.border}` }}>
+          <Tabs
+            defaultActiveKey={hasSubscription ? 'status' : 'limits'}
+            items={[
+              {
+                key: 'status',
+                label: 'حالة الاشتراك',
+                children: (
+                  <Descriptions bordered column={1} size="middle">
+                    <Descriptions.Item label="الخطة الحالية">{planUsage.plan.name} ({planUsage.plan.key})</Descriptions.Item>
+                    <Descriptions.Item label="مدة الاشتراك">{totalDays != null ? `${totalDays} يوم` : 'اشتراك شهري'}</Descriptions.Item>
+                    <Descriptions.Item label="تاريخ التفعيل">{startedAt ? startedAt.toLocaleString('ar-SA') : 'غير متوفر'}</Descriptions.Item>
+                    <Descriptions.Item label="تاريخ الانتهاء">{endsAt ? endsAt.toLocaleString('ar-SA') : 'غير متوفر'}</Descriptions.Item>
+                    <Descriptions.Item label="الوقت المتبقي">{remainingDays != null ? `${remainingDays} يوم تقريبا` : 'غير متوفر'}</Descriptions.Item>
+                  </Descriptions>
+                ),
+              },
+              {
+                key: 'limits',
+                label: 'الحدود والاستخدام',
+                children: (
+                  <Text type="secondary">
+                    عند تجاوز حدود الخطة، سيتم إيقاف الإضافة الجديدة حتى تتم الترقية. الحدود الحالية: {planUsage.plan.max_users} مستخدم، {planUsage.plan.max_properties} عقار، وتخزين {formatStorage(planUsage.plan.max_storage_mb)}.
+                  </Text>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      </Space>
     );
   };
 
   const renderSubdomainSection = () => (
     <>
-      <Card style={{ marginBottom: 16 }}>
-        <Title level={4}>السب دومين</Title>
+      <Card bordered={false} style={{ marginBottom: 16, borderRadius: 18, border: `1px solid ${palette.border}` }}>
+        <Title level={4} style={{ color: palette.text }}>السب دومين</Title>
         <Text type="secondary">
           يمكنك ربط مكتبك برابط مخصص مثل: <Text code>company.platform.com</Text>
         </Text>
@@ -587,8 +745,8 @@ const SettingsPage: React.FC = () => {
   );
 
   const renderAccountSection = () => (
-    <Card>
-      <Title level={4}>إعدادات الحساب</Title>
+    <Card bordered={false} style={{ borderRadius: 18, border: `1px solid ${palette.border}` }}>
+      <Title level={4} style={{ color: palette.text }}>إعدادات الحساب</Title>
       <Form
         layout="vertical"
         form={accountForm}
@@ -650,22 +808,33 @@ const SettingsPage: React.FC = () => {
         <Form.Item label="رقم التواصل" name="contact_phone">
           <Input placeholder="+9665xxxxxxxx" />
         </Form.Item>
-        <Form.Item label="البريد المسجل في النظام">
+<Form.Item label="البريد المسجل في النظام">
           <Input value={currentUser?.email} disabled />
         </Form.Item>
-        <Form.Item style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <div>
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={savingAccount}
-              style={{ marginLeft: 8 }}
-            >
-              حفظ إعدادات الشركة
-            </Button>
-          </div>
-          <Button onClick={handleBackToApp} icon={<ArrowRightOutlined />}>
-            العودة للمنصة
+        <Form.Item label="اسم المستخدم (يُستخدم في الملاحظات)">
+          <Input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="أدخل اسمك لعرضه في الملاحظات"
+          />
+        </Form.Item>
+        <Form.Item>
+          <Button
+            type="primary"
+            onClick={handleSaveDisplayName}
+            loading={savingDisplayName}
+          >
+            حفظ اسم المستخدم
+          </Button>
+        </Form.Item>
+        <Form.Item>
+          <Button
+            type="primary"
+            htmlType="submit"
+            loading={savingAccount}
+            style={{ borderRadius: 10, background: palette.accent }}
+          >
+            حفظ إعدادات الشركة
           </Button>
         </Form.Item>
       </Form>
@@ -673,7 +842,7 @@ const SettingsPage: React.FC = () => {
   );
 
   const renderUsersSection = () => (
-    <Card>
+    <Card bordered={false} style={{ borderRadius: 18, border: `1px solid ${palette.border}` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>
           المستخدمون والموظفون
@@ -690,6 +859,7 @@ const SettingsPage: React.FC = () => {
             setEditingEmployee(null);
             employeeForm.resetFields();
             employeeForm.setFieldsValue({
+              role: 'employee',
               can_add_property: true,
               can_edit_property: true,
               can_delete_property: false,
@@ -721,25 +891,30 @@ const SettingsPage: React.FC = () => {
         onOk={async () => {
           try {
             const values = await employeeForm.validateFields();
+            const selectedRole = values.role || 'employee';
             const permissions = {
-              can_add_property: values.can_add_property,
-              can_edit_property: values.can_edit_property,
-              can_delete_property: values.can_delete_property,
-              can_manage_files: values.can_manage_files,
+              can_add_property: selectedRole === 'manager' ? true : values.can_add_property,
+              can_edit_property: selectedRole === 'manager' ? true : values.can_edit_property,
+              can_delete_property: selectedRole === 'manager' ? true : values.can_delete_property,
+              can_manage_files: selectedRole === 'manager' ? true : values.can_manage_files,
             };
 
-            if (editingEmployee) {
+if (editingEmployee) {
               const updated = await updateEmployeeUser(editingEmployee.id, {
                 status: values.status,
+                role: selectedRole,
                 permissions,
+                display_name: values.display_name || undefined,
               });
               setTeamUsers((prev) =>
                 prev.map((u) =>
                   u.id === updated.id
                     ? {
                         ...u,
+                        role: updated.role,
                         status: updated.status,
                         permissions: updated.permissions,
+                        display_name: updated.display_name,
                       }
                     : u,
                 ),
@@ -749,7 +924,9 @@ const SettingsPage: React.FC = () => {
               const created = await createEmployeeUser({
                 email: values.email,
                 password: values.password || '',
+                role: selectedRole,
                 permissions,
+                display_name: values.display_name || undefined,
               });
               setTeamUsers((prev) => [...prev, created]);
               message.success('تم إضافة الموظف بنجاح.');
@@ -775,7 +952,7 @@ const SettingsPage: React.FC = () => {
           layout="vertical"
           form={employeeForm}
         >
-          <Form.Item
+<Form.Item
             label="البريد الإلكتروني"
             name="email"
             rules={[{ required: true, message: 'الرجاء إدخال بريد الموظف.' }]}
@@ -791,6 +968,34 @@ const SettingsPage: React.FC = () => {
               <Input.Password />
             </Form.Item>
           )}
+          <Form.Item
+            label="اسم الموظف (يظهر في الملاحظات)"
+            name="display_name"
+          >
+            <Input placeholder="أدخل اسم الموظف لعرضه في الملاحظات" />
+          </Form.Item>
+          <Form.Item
+            label="نوع المستخدم"
+            name="role"
+            rules={[{ required: true, message: 'الرجاء اختيار نوع المستخدم.' }]}
+          >
+            <Select
+              options={[
+                { value: 'employee', label: 'موظف' },
+                { value: 'manager', label: 'مدير' },
+              ]}
+              onChange={(value) => {
+                if (value === 'manager') {
+                  employeeForm.setFieldsValue({
+                    can_add_property: true,
+                    can_edit_property: true,
+                    can_delete_property: true,
+                    can_manage_files: true,
+                  });
+                }
+              }}
+            />
+          </Form.Item>
           {editingEmployee && (
             <Form.Item label="حالة الموظف" name="status">
               <Input disabled value={employeeForm.getFieldValue('status') === 'active' ? 'نشط' : 'موقوف'} />
@@ -800,29 +1005,34 @@ const SettingsPage: React.FC = () => {
           <Title level={5} style={{ marginTop: 8 }}>
             صلاحيات الموظف
           </Title>
+          {isManagerRoleSelected && (
+            <Text type="secondary">
+              المدير يملك جميع صلاحيات التشغيل تلقائيا، ولا يمكنه الدخول إلى الإعدادات أو الفوترة.
+            </Text>
+          )}
           <Space direction="vertical" style={{ width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text>إضافة عقار</Text>
               <Form.Item name="can_add_property" noStyle valuePropName="checked">
-                <Switch />
+                <Switch disabled={isManagerRoleSelected} />
               </Form.Item>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text>تعديل العقارات</Text>
               <Form.Item name="can_edit_property" noStyle valuePropName="checked">
-                <Switch />
+                <Switch disabled={isManagerRoleSelected} />
               </Form.Item>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text>حذف العقارات</Text>
               <Form.Item name="can_delete_property" noStyle valuePropName="checked">
-                <Switch />
+                <Switch disabled={isManagerRoleSelected} />
               </Form.Item>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text>إدارة الملفات (رفع / حذف المرفقات)</Text>
               <Form.Item name="can_manage_files" noStyle valuePropName="checked">
-                <Switch />
+                <Switch disabled={isManagerRoleSelected} />
               </Form.Item>
             </div>
           </Space>
@@ -832,12 +1042,12 @@ const SettingsPage: React.FC = () => {
   );
 
   const renderRolesSection = () => (
-    <Card>
-      <Title level={4}>الأدوار والصلاحيات</Title>
-      <Card type="inner" title="مالك الحساب (Owner)" style={{ marginBottom: 16 }}>
+    <Card bordered={false} style={{ borderRadius: 18, border: `1px solid ${palette.border}` }}>
+      <Title level={4} style={{ color: palette.text }}>الأدوار والصلاحيات</Title>
+      <Card type="inner" title="مالك الحساب (Owner)" style={{ marginBottom: 16, borderRadius: 14 }}>
         <Text>يملك جميع الصلاحيات في النظام: إدارة الخطط، الإعدادات، العقارات، الملفات، والمستخدمين.</Text>
       </Card>
-      <Card type="inner" title="الموظفون (Employees)">
+      <Card type="inner" title="الموظفون (Employees)" style={{ borderRadius: 14 }}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text>إضافة عقار</Text>
@@ -864,8 +1074,8 @@ const SettingsPage: React.FC = () => {
   );
 
   const renderBillingSection = () => (
-    <Card>
-      <Title level={4}>الفوترة</Title>
+    <Card bordered={false} style={{ borderRadius: 18, border: `1px solid ${palette.border}` }}>
+      <Title level={4} style={{ color: palette.text }}>الفوترة</Title>
       <Space align="start" direction="vertical" style={{ width: '100%' }}>
         <Space align="start">
           <ExclamationCircleOutlined style={{ color: '#faad14', fontSize: 20 }} />
@@ -923,23 +1133,36 @@ const SettingsPage: React.FC = () => {
   };
 
   return (
-    <Layout style={{ minHeight: '100vh', direction: 'rtl', background: 'linear-gradient(145deg, #eef1ec 0%, #f4f5f2 52%, #ecefe8 100%)', padding: 14 }}>
+    <Layout className="dashboard-light" style={{ minHeight: '100vh', direction: 'rtl', background: palette.pageBg, padding: 14 }}>
       <Sider
-        width={240}
-        style={{ background: '#ffffff', borderLeft: '1px solid #e4e7df', borderRadius: 18, overflow: 'hidden' }}
+        width={276}
+        style={{
+          background: palette.surface,
+          borderLeft: `1px solid ${palette.border}`,
+          borderRadius: 20,
+          overflowY: 'auto',
+          position: 'sticky',
+          top: 14,
+          alignSelf: 'flex-start',
+          height: 'calc(100vh - 28px)',
+          zIndex: 20,
+        }}
       >
-        <div style={{ padding: 16, borderBottom: '1px solid #e4e7df', textAlign: 'center' }}>
-          <Title level={4} style={{ margin: 0 }}>
+        <div style={{ padding: '20px 18px 16px', borderBottom: `1px solid ${palette.border}` }}>
+          <Space direction="vertical" size={4}>
+            <Avatar style={{ background: palette.accent, color: '#fff' }} icon={<SettingOutlined />} />
+            <Title level={4} style={{ margin: 0, color: palette.text }}>
             إعدادات المنصة
-          </Title>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            إدارة مكتبك العقاري في مكان واحد
-          </Text>
+            </Title>
+            <Text style={{ color: palette.muted, fontSize: 12 }}>
+              مركز تحكم مكتبك وفريقك واشتراكك
+            </Text>
+          </Space>
         </div>
         <Menu
           mode="inline"
           selectedKeys={[section]}
-          style={{ borderInlineEnd: 'none' }}
+          style={{ borderInlineEnd: 'none', background: 'transparent', padding: '12px 8px' }}
           onClick={(e) => {
             if (e.key === 'dashboard') {
               navigate('/app');
@@ -948,32 +1171,52 @@ const SettingsPage: React.FC = () => {
             setSection(e.key as SettingsSectionKey);
           }}
           items={[
-            { key: 'dashboard', label: 'لوحة التحكم' },
-            { key: 'plans', label: 'الخطط والاشتراكات' },
-            { key: 'account', label: 'إعدادات الحساب' },
-            { key: 'subdomain', label: 'السب دومين' },
-            { key: 'users', label: 'المستخدمون والموظفون' },
-            { key: 'roles', label: 'الأدوار والصلاحيات' },
-            { key: 'billing', label: 'الفوترة' },
+            { key: 'dashboard', icon: <HomeOutlined />, label: 'لوحة التحكم' },
+            { key: 'plans', icon: <CrownOutlined />, label: 'الخطط والاشتراكات' },
+            { key: 'account', icon: <SettingOutlined />, label: 'إعدادات الحساب' },
+            { key: 'subdomain', icon: <LinkOutlined />, label: 'السب دومين' },
+            { key: 'users', icon: <TeamOutlined />, label: 'المستخدمون والموظفون' },
+            { key: 'roles', icon: <SafetyCertificateOutlined />, label: 'الأدوار والصلاحيات' },
+            { key: 'billing', icon: <CreditCardOutlined />, label: 'الفوترة' },
           ]}
         />
+        <div style={{ marginTop: 'auto', padding: 14 }}>
+          <Card bordered={false} style={{ borderRadius: 16, background: palette.accentSoft }}>
+            <Space direction="vertical" size={4}>
+              <Text strong style={{ color: palette.text }}>{companySettings.company_name || 'مكتبك العقاري'}</Text>
+              <Text style={{ color: palette.muted, fontSize: 12 }}>{currentUser?.email || 'حساب المنصة'}</Text>
+            </Space>
+          </Card>
+        </div>
       </Sider>
-      <Layout>
-        <Content style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
-          <div style={{ marginBottom: 16 }}>
-            <Title level={3} style={{ marginBottom: 4 }}>
-              {section === 'plans' && 'الخطط والاشتراكات'}
-              {section === 'account' && 'إعدادات الحساب'}
-              {section === 'subdomain' && 'إعدادات السب دومين'}
-              {section === 'users' && 'المستخدمون والموظفون'}
-              {section === 'roles' && 'الأدوار والصلاحيات'}
-              {section === 'billing' && 'الفوترة'}
-            </Title>
-            <Text type="secondary">
-              قم بإدارة إعدادات منصتك العقارية بما يناسب احتياج مكتبك في السعودية.
-            </Text>
-          </div>
-          <div style={{ background: '#fff', border: '1px solid #e4e7df', borderRadius: 16, padding: 12, boxShadow: '0 10px 24px rgba(41,66,49,0.07)' }}>
+      <Layout style={{ background: 'transparent' }}>
+        <Content style={{ padding: '0 18px 18px', maxWidth: 1180, width: '100%', margin: '0 auto' }}>
+          <Card
+            bordered={false}
+            style={{
+              borderRadius: 20,
+              marginBottom: 16,
+              border: `1px solid ${palette.border}`,
+              boxShadow: '0 10px 24px rgba(41,66,49,0.07)',
+            }}
+            styles={{ body: { padding: '18px 20px' } }}
+          >
+            <Space style={{ width: '100%', justifyContent: 'space-between' }} align="center" wrap>
+              <Space align="center" size={12}>
+                <Avatar size={44} style={{ background: palette.accentSoft, color: palette.accent }} icon={sectionMeta[section].icon} />
+                <div>
+                  <Title level={3} style={{ margin: 0, color: palette.text }}>
+                    {sectionMeta[section].title}
+                  </Title>
+                  <Text style={{ color: palette.muted }}>{sectionMeta[section].description}</Text>
+                </div>
+              </Space>
+              <Button onClick={handleBackToApp} icon={<ArrowRightOutlined />}>
+                العودة للمنصة
+              </Button>
+            </Space>
+          </Card>
+          <div>
             {renderSection()}
           </div>
         </Content>
@@ -983,5 +1226,3 @@ const SettingsPage: React.FC = () => {
 };
 
 export default SettingsPage;
-
-

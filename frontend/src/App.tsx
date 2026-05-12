@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Layout, Typography, message, Button, ConfigProvider, Card, Row, Col, Tag } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { Layout, Typography, message, Button, ConfigProvider, Card, Row, Col, Tag, Avatar, Space } from 'antd';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
     SettingOutlined,
     LogoutOutlined,
@@ -11,12 +11,11 @@ import {
     HomeOutlined,
     ApartmentOutlined,
     EyeOutlined,
-    UsergroupAddOutlined,
     AppstoreOutlined,
     EnvironmentOutlined,
-    MessageOutlined,
-    CheckCircleOutlined,
-    ClockCircleOutlined,
+    SolutionOutlined,
+    UserOutlined,
+    ScheduleOutlined,
 } from '@ant-design/icons';
 import {
     Property,
@@ -28,19 +27,39 @@ import {
     setAuthToken,
     resolveMediaUrl,
     getDashboardOverview,
+    getClientProfiles,
     type DashboardOverview,
-    updateInquiryStatus,
+    type ClientProfile,
 } from './services/api';
 import PropertyForm from './components/PropertyForm';
 import NavigationTree from './components/NavigationTree';
 import PropertyList from './components/PropertyList';
 import Search from 'antd/es/input/Search';
+import { Tabs } from 'antd';
 import PlatformLogo from './components/PlatformLogo';
+import AppointmentsPage from './components/AppointmentsPage';
+import ClientRequestsPanel from './components/ClientRequestsPanel';
+import ClientOffersPanel from './components/ClientOffersPanel';
 
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
 const PLATFORM_OWNER_EMAIL = 'abadi.saeed@bynh.sa';
+type AppSection = 'overview' | 'properties' | 'clients' | 'appointments';
+type ClientsTab = 'requests' | 'offers';
+
+const getSectionFromSearch = (search: string): AppSection => {
+    const section = new URLSearchParams(search).get('section');
+    if (section === 'properties' || section === 'clients' || section === 'appointments') {
+        return section;
+    }
+    return 'overview';
+};
+
+const getClientsTabFromSearch = (search: string): ClientsTab => {
+    const tab = new URLSearchParams(search).get('tab');
+    return tab === 'offers' ? 'offers' : 'requests';
+};
 
 const App: React.FC = () => {
     const [properties, setProperties] = useState<Property[]>([]);
@@ -50,11 +69,15 @@ const App: React.FC = () => {
     const [companyName, setCompanyName] = useState<string>('');
     const [siderCollapsed, setSiderCollapsed] = useState<boolean>(false);
     const [treeReloadKey, setTreeReloadKey] = useState<number>(0);
-    const [showPropertyForm, setShowPropertyForm] = useState<boolean>(false);
-    const [activeSection, setActiveSection] = useState<'overview' | 'properties' | 'inquiries'>('overview');
+const [showPropertyForm, setShowPropertyForm] = useState<boolean>(false);
+const [activeSection, setActiveSection] = useState<AppSection>(() => getSectionFromSearch(window.location.search));
+    const [clientsTab, setClientsTab] = useState<ClientsTab>(() => getClientsTabFromSearch(window.location.search));
     const [overview, setOverview] = useState<DashboardOverview | null>(null);
     const [isMobile, setIsMobile] = useState<boolean>(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
+const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
+    const [recentClients, setRecentClients] = useState<ClientProfile[]>([]);
     const navigate = useNavigate();
+    const location = useLocation();
 
     useEffect(() => {
         const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -74,7 +97,7 @@ const App: React.FC = () => {
         }
     }, [filters]);
 
-    const fetchOverview = useCallback(async () => {
+const fetchOverview = useCallback(async () => {
         try {
             const data = await getDashboardOverview();
             setOverview(data);
@@ -82,6 +105,20 @@ const App: React.FC = () => {
             setOverview(null);
         }
     }, []);
+
+    const fetchRecentClients = useCallback(async () => {
+        try {
+            const profiles = await getClientProfiles();
+            // Sort by created_at descending and take the most recent 5
+            const sorted = profiles.sort((a, b) => 
+                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
+            setRecentClients(sorted.slice(0, 5));
+        } catch {
+            setRecentClients([]);
+        }
+    }, []);
+
 
     useEffect(() => {
         const initAuth = async () => {
@@ -109,13 +146,60 @@ const App: React.FC = () => {
         initAuth();
     }, [navigate]);
 
-    useEffect(() => {
+useEffect(() => {
         fetchAndSetProperties();
     }, [fetchAndSetProperties]);
 
     useEffect(() => {
         fetchOverview();
     }, [fetchOverview]);
+
+    useEffect(() => {
+        setActiveSection(getSectionFromSearch(location.search));
+        setClientsTab(getClientsTabFromSearch(location.search));
+    }, [location.search]);
+
+    // Refresh recent clients when switching to overview section
+    useEffect(() => {
+        if (activeSection === 'overview') {
+            fetchRecentClients();
+        }
+    }, [activeSection, fetchRecentClients]);
+
+// Check URL for property ID and open details modal
+    useEffect(() => {
+        const path = location.pathname;
+        // Check if we're on /property/:id or /app/property/:id
+        const propertyIdMatch = path.match(/\/property\/([^/]+)$/);
+        if (propertyIdMatch && propertyIdMatch[1]) {
+            const propId = propertyIdMatch[1];
+            // Find the property in our list and open its details
+            const foundProperty = properties.find(p => p.id === propId);
+            if (foundProperty) {
+                // Switch to properties section and open details
+                setActiveSection('properties');
+                setSelectedPropertyId(propId);
+            }
+        }
+    }, [location.pathname, properties]);
+
+    // Handle navigation state from other pages (like ClientProfilePage)
+    useEffect(() => {
+const state = location.state as { section?: string; tab?: string } | null;
+        if (state?.section) {
+            const section = state.section as AppSection;
+            if (['overview', 'properties', 'clients', 'appointments'].includes(section)) {
+                const tab = state.tab === 'offers' ? 'offers' : 'requests';
+                setActiveSection(section);
+                if (section === 'clients') {
+                    setClientsTab(tab);
+                }
+                if (section !== 'properties') {
+                    setSelectedPropertyId(null);
+                }
+            }
+        }
+    }, [location.state]);
     
     const handleSearch = async (query: string) => {
         if (!query) {
@@ -148,11 +232,36 @@ const App: React.FC = () => {
         }
     };
 
-    const handleLogout = () => {
+const handleLogout = () => {
         setAuthToken(null);
         setCurrentUser(null);
         message.success('تم تسجيل الخروج.');
         navigate('/auth', { replace: true });
+    };
+
+// Clear selected property when switching sections
+    const handleSectionChange = (section: AppSection, tab?: ClientsTab) => {
+        setActiveSection(section);
+        if (section === 'clients' && tab) {
+            setClientsTab(tab);
+        }
+        // Clear selected property when leaving properties section
+        if (section !== 'properties') {
+            setSelectedPropertyId(null);
+        }
+        const params = new URLSearchParams();
+        if (section !== 'overview') {
+            params.set('section', section);
+        }
+        if (section === 'clients') {
+            params.set('tab', tab || clientsTab);
+        }
+        const search = params.toString();
+        navigate(`/app${search ? `?${search}` : ''}`, { replace: false });
+    };
+
+    const handleClientsTabChange = (tab: ClientsTab) => {
+        handleSectionChange('clients', tab);
     };
 
     const isPlatformOwner = (currentUser?.email || '').toLowerCase() === PLATFORM_OWNER_EMAIL;
@@ -185,9 +294,8 @@ const App: React.FC = () => {
         },
     };
 
-    const totalProperties = overview?.total_properties ?? properties.length;
+const totalProperties = overview?.total_properties ?? properties.length;
     const totalViewsLabel = overview ? overview.total_views.toLocaleString('ar-SA') : 'غير متوفرة';
-    const newInterestedLabel = overview ? overview.total_inquiries.toLocaleString('ar-SA') : 'غير متوفرة';
     const latestProperties = properties.slice(0, 4);
 
     return (
@@ -208,6 +316,12 @@ const App: React.FC = () => {
                     background: palette.surface,
                     borderLeft: palette.glassBorder,
                     borderRadius: 20,
+                    position: 'sticky',
+                    top: 14,
+                    alignSelf: 'flex-start',
+                    height: 'calc(100vh - 28px)',
+                    overflowY: 'auto',
+                    zIndex: 20,
                 }}
             >
                 <div style={{ padding: '18px 16px 12px', borderBottom: palette.glassBorder }}>
@@ -225,7 +339,7 @@ const App: React.FC = () => {
                                 setShowPropertyForm((prev) => !prev);
                                 return;
                             }
-                            setActiveSection('properties');
+                            handleSectionChange('properties');
                             setShowPropertyForm(true);
                             setFilters({});
                         }}
@@ -243,7 +357,7 @@ const App: React.FC = () => {
                             borderRadius: 10,
                             background: activeSection === 'overview' ? '#edf5e9' : 'transparent',
                         }}
-                        onClick={() => setActiveSection('overview')}
+onClick={() => handleSectionChange('overview')}
                     >
                         نظرة عامة
                     </Button>
@@ -256,23 +370,48 @@ const App: React.FC = () => {
                             borderRadius: 10,
                             background: activeSection === 'properties' ? '#edf5e9' : 'transparent',
                         }}
-                        onClick={() => setActiveSection('properties')}
-                    >
+onClick={() => handleSectionChange('properties')}
+>
                         قائمة العقارات
                     </Button>
-                    <Button
+<Button
                         type="text"
-                        icon={<MessageOutlined />}
+                        icon={<SolutionOutlined />}
                         style={{
                             justifyContent: 'flex-start',
                             color: palette.text,
                             borderRadius: 10,
-                            background: activeSection === 'inquiries' ? '#edf5e9' : 'transparent',
+                            background: activeSection === 'clients' ? '#edf5e9' : 'transparent',
                         }}
-                        onClick={() => setActiveSection('inquiries')}
+                        onClick={() => handleSectionChange('clients')}
                     >
-                        الاستفسارات
+                        العملاء والطلبات
                     </Button>
+                    <Button
+                        type="text"
+                        icon={<ScheduleOutlined />}
+                        style={{
+                            justifyContent: 'flex-start',
+                            color: palette.text,
+                            borderRadius: 10,
+                            background: activeSection === 'appointments' ? '#edf5e9' : 'transparent',
+                        }}
+                        onClick={() => handleSectionChange('appointments')}>
+                        المواعيد والمتابعة
+                    </Button>
+{activeSection === 'clients' && (
+                        <div style={{ padding: '0px 8px', marginTop: 8 }}>
+<Tabs
+                                activeKey={clientsTab}
+                                onChange={(key) => handleClientsTabChange(key as ClientsTab)}
+                                items={[
+                                    { key: 'requests', label: 'طلبات العملاء' },
+                                    { key: 'offers', label: 'عروض العملاء' },
+                                ]}
+                                style={{ width: '100%' }}
+                            />
+                        </div>
+                    )}
                 </div>
                 <div style={{ padding: 8 }}>
                     {activeSection === 'properties' && (
@@ -280,20 +419,16 @@ const App: React.FC = () => {
                     )}
                 </div>
                 <div style={{ marginTop: 'auto', padding: '8px 10px 14px', display: 'grid', gap: 8 }}>
-                    <Button
-                        type="text"
-                        icon={<SettingOutlined />}
-                        onClick={() => {
-                            if (currentUser?.role !== 'owner') {
-                                message.error('ليس لديك صلاحية فتح صفحة الإعدادات. تواصل مع مالك الحساب.');
-                                return;
-                            }
-                            navigate('/settings');
-                        }}
-                        style={{ justifyContent: 'flex-start', color: palette.text, borderRadius: 10 }}
-                    >
-                        الإعدادات
-                    </Button>
+                    {currentUser?.role === 'owner' && (
+                        <Button
+                            type="text"
+                            icon={<SettingOutlined />}
+                            onClick={() => navigate('/settings')}
+                            style={{ justifyContent: 'flex-start', color: palette.text, borderRadius: 10 }}
+                        >
+                            الإعدادات
+                        </Button>
+                    )}
                     {isPlatformOwner && (
                         <Button
                             type="text"
@@ -369,7 +504,15 @@ const App: React.FC = () => {
                                         lineHeight: 1.15,
                                     }}
                                 >
-                                    {activeSection === 'overview' ? 'نظرة عامة' : activeSection === 'inquiries' ? 'الاستفسارات' : 'قائمة العقارات'}
+{activeSection === 'overview'
+                                        ? 'نظرة عامة'
+                                        : activeSection === 'clients'
+                                            ? clientsTab === 'requests'
+                                                ? 'طلبات العملاء'
+                                                : 'عروض العملاء'
+                                            : activeSection === 'appointments'
+                                            ? 'المواعيد والمتابعة'
+                                            : 'قائمة العقارات'}
                                 </Title>
                                 <Text style={{ color: palette.textMuted, fontSize: 12 }}>
                                     إجمالي العروض: {properties.length}
@@ -464,7 +607,7 @@ const App: React.FC = () => {
                                         <Text strong style={{ color: palette.textMuted }}>مشاهدات العروض</Text>
                                     </Card>
                                 </Col>
-                                <Col xs={24} sm={12} lg={8}>
+<Col xs={24} sm={12} lg={8}>
                                     <Card style={{ borderRadius: 16 }}>
                                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
                                             <Tag color="green" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
@@ -483,13 +626,13 @@ const App: React.FC = () => {
                                                     fontSize: 20,
                                                 }}
                                             >
-                                                <UsergroupAddOutlined />
+                                                <SolutionOutlined />
                                             </div>
                                         </div>
                                         <Title level={2} style={{ margin: '12px 0 2px', color: palette.text }}>
-                                            {newInterestedLabel}
+                                            {overview?.total_inquiries?.toLocaleString('ar-SA') || '0'}
                                         </Title>
-                                        <Text strong style={{ color: palette.textMuted }}>استفسارات جديدة</Text>
+<Text strong style={{ color: palette.textMuted }}>الطلبات والعروض</Text>
                                     </Card>
                                 </Col>
                             </Row>
@@ -526,7 +669,7 @@ const App: React.FC = () => {
                                                                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                                                             />
                                                         ) : null}
-                                                        <Tag color="green" style={{ position: 'absolute', top: 10, left: 10, borderRadius: 999 }}>
+<Tag color="green" style={{ position: 'absolute', top: 10, right: 10, borderRadius: 999 }}>
                                                             {item.price ? `${item.price.toLocaleString('ar-SA')} ريال` : 'سعر غير متوفر'}
                                                         </Tag>
                                                     </div>
@@ -544,105 +687,94 @@ const App: React.FC = () => {
                                         </div>
                                     </Card>
                                 </Col>
-                                <Col xs={24} lg={10}>
+<Col xs={24} lg={10}>
                                     <Card
-                                        title={<span style={{ color: palette.text }}>آخر الاستفسارات</span>}
+                                        title={<span style={{ color: palette.text }}>أخر العملاء</span>}
                                         extra={
                                             <Button
                                                 type="link"
                                                 style={{ color: '#93a26f', padding: 0 }}
-                                                onClick={() => setActiveSection('inquiries')}
+                                                onClick={() => handleSectionChange('clients')}
                                             >
                                                 عرض الكل
                                             </Button>
                                         }
                                     >
-                                        {overview && overview.recent_inquiries.length > 0 ? (
-                                            <div style={{ display: 'grid', gap: 10 }}>
-                                                {overview.recent_inquiries.slice(0, 3).map((inq) => (
-                                                    <Card key={inq.id} size="small" style={{ borderRadius: 12 }}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                                                            <Text strong>{inq.name || 'عميل مهتم'}</Text>
-                                                            <Button
-                                                                type="text"
-                                                                icon={inq.status === 'responded' ? <CheckCircleOutlined style={{ color: '#16a34a' }} /> : <ClockCircleOutlined style={{ color: '#f59e0b' }} />}
-                                                                onClick={async () => {
-                                                                    try {
-                                                                        const nextStatus = inq.status === 'responded' ? 'new' : 'responded';
-                                                                        await updateInquiryStatus(inq.id, nextStatus);
-                                                                        await fetchOverview();
-                                                                        message.success(nextStatus === 'responded' ? 'تم تعيين الاستفسار كمُجاب.' : 'تم إرجاع الاستفسار كغير مُجاب.');
-                                                                    } catch (e: any) {
-                                                                        message.error(e?.response?.data?.detail || 'تعذر تحديث حالة الاستفسار.');
-                                                                    }
-                                                                }}
-                                                            />
-                                                        </div>
-                                                        <div style={{ marginTop: 4 }}>
-                                                            <Text style={{ color: palette.textMuted }}>{inq.message}</Text>
-                                                        </div>
-                                                        <div style={{ marginTop: 4 }}>
-                                                            <Text type="secondary">
-                                                                {inq.city || 'غير محدد'} - {inq.neighborhood || 'غير محدد'}
-                                                            </Text>
-                                                        </div>
-                                                    </Card>
-                                                ))}
-                                            </div>
+                                        {recentClients.length === 0 ? (
+                                            <Text style={{ color: palette.textMuted }}>
+                                                لا توجد عملاء بعد. أضف عميلاً جديداً من قسم العملاء
+                                            </Text>
                                         ) : (
-                                            <Text style={{ color: palette.textMuted }}>غير متوفرة</Text>
+<div style={{ display: 'grid', gap: 8 }}>
+                                                {recentClients.map((client) => {
+                                                    const clientKey = `${client.client_name || 'غير محدد'}|${client.phone_number || ''}`;
+                                                    const types = client.client_types || [];
+                                                    return (
+                                                        <div
+                                                            key={client.id}
+                                                            style={{
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'space-between',
+                                                                padding: '8px 12px',
+                                                                background: '#f9fafb',
+                                                                borderRadius: 8,
+                                                                cursor: 'pointer',
+                                                            }}
+                                                            onClick={() => navigate(`/app/clients/${encodeURIComponent(clientKey)}`, { state: { clientSourceTab: types.includes('offer') ? 'offers' : 'requests' } })}
+                                                        >
+                                                            <Space size={8}>
+                                                                <Avatar size="small" icon={<UserOutlined />} style={{ background: '#e6f4ea' }} />
+                                                                <Text strong style={{ color: '#1677ff', fontSize: 13 }}>
+                                                                    {client.client_name || 'غير محدد'}
+                                                                </Text>
+                                                            </Space>
+                                                            <div style={{ display: 'flex', gap: 4 }}>
+                                                                {types.includes('request') && (
+                                                                    <Tag color="blue" style={{ marginInlineEnd: 0, fontSize: 10, padding: '0 4px' }}>
+                                                                        طلب
+                                                                    </Tag>
+                                                                )}
+                                                                {types.includes('offer') && (
+                                                                    <Tag color="green" style={{ marginInlineEnd: 0, fontSize: 10, padding: '0 4px' }}>
+                                                                        عرض
+                                                                    </Tag>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
                                         )}
                                     </Card>
                                 </Col>
                             </Row>
                         </div>
-                    ) : activeSection === 'inquiries' ? (
-                        <Card title="الاستفسارات">
-                            {overview && overview.recent_inquiries.length > 0 ? (
-                                <div style={{ display: 'grid', gap: 12 }}>
-                                    {overview.recent_inquiries.map((inq) => (
-                                        <Card key={inq.id} size="small" style={{ borderRadius: 12 }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                                                <Text strong>{inq.name || 'عميل مهتم'}</Text>
-                                                <Button
-                                                    type="text"
-                                                    icon={inq.status === 'responded' ? <CheckCircleOutlined style={{ color: '#16a34a' }} /> : <ClockCircleOutlined style={{ color: '#f59e0b' }} />}
-                                                    onClick={async () => {
-                                                        try {
-                                                            const nextStatus = inq.status === 'responded' ? 'new' : 'responded';
-                                                            await updateInquiryStatus(inq.id, nextStatus);
-                                                            await fetchOverview();
-                                                            message.success(nextStatus === 'responded' ? 'تم تعيين الاستفسار كمُجاب.' : 'تم إرجاع الاستفسار كغير مُجاب.');
-                                                        } catch (e: any) {
-                                                            message.error(e?.response?.data?.detail || 'تعذر تحديث حالة الاستفسار.');
-                                                        }
-                                                    }}
-                                                />
-                                            </div>
-                                            <div style={{ marginTop: 6 }}>
-                                                <Text>{inq.message}</Text>
-                                            </div>
-                                            <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                                <Tag>{inq.property_title || 'عرض عقاري'}</Tag>
-                                                <Tag>{inq.phone || 'لا يوجد رقم'}</Tag>
-                                            </div>
-                                        </Card>
-                                    ))}
-                                </div>
-                            ) : (
-                                <Text type="secondary">لا توجد استفسارات حتى الآن.</Text>
-                            )}
-                        </Card>
+) : activeSection === 'clients' ? (
+                        clientsTab === 'requests' ? (
+                            <ClientRequestsPanel loading={loading} currentUser={currentUser} />
+                        ) : (
+                            <ClientOffersPanel loading={loading} currentUser={currentUser} />
+                        )
+                    ) : activeSection === 'appointments' ? (
+                        <AppointmentsPage />
                     ) : (
                         <>
                             {showPropertyForm && (
                                 <PropertyForm onSuccess={handlePropertyCreated} currentUser={currentUser} />
                             )}
-                            <PropertyList
+<PropertyList
                                 properties={properties}
                                 loading={loading}
                                 onRefresh={fetchAndSetProperties}
                                 currentUser={currentUser}
+                                openPropertyId={selectedPropertyId}
+                                onPropertyClosed={() => setSelectedPropertyId(null)}
+                                onPropertySelect={(property) => {
+                                    // Switch to properties section when clicking on a property
+                                    handleSectionChange('properties');
+                                    setSelectedPropertyId(property.id || null);
+                                }}
                             />
                         </>
                     )}

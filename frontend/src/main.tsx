@@ -9,6 +9,7 @@ import SettingsPage from './components/SettingsPage';
 import CompanyPublicPropertiesPage from './components/CompanyPublicPropertiesPage';
 import StripeCheckoutPage from './components/StripeCheckoutPage';
 import PlatformAdminPage from './components/PlatformAdminPage';
+import ClientProfilePage from './components/ClientProfilePage';
 import './style.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
@@ -18,6 +19,8 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
         <Route path="/" element={<LandingPage />} />
         <Route path="/auth" element={<AuthPage />} />
         <Route path="/app" element={<App />} />
+        <Route path="/app/property/:id" element={<App />} />
+        <Route path="/app/clients/:clientKey" element={<ClientProfilePage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/platform-admin" element={<PlatformAdminPage />} />
         <Route path="/billing/checkout" element={<StripeCheckoutPage />} />
