@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
@@ -1204,6 +1205,7 @@ def client_offer_helper(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": str(_id) if _id is not None else "",
         "owner_id": item.get("owner_id", ""),
+        "profile_id": item.get("profile_id") or item.get("client_profile_id"),
         "client_name": item.get("client_name", "غير محدد"),
         "phone_number": item.get("phone_number"),
         "property_id": item.get("property_id", ""),
@@ -1221,6 +1223,7 @@ async def create_client_offer_db(owner_id: str, payload: Dict[str, Any]) -> Dict
     """Create a new client offer (link a property to a client)."""
     doc = {
         "owner_id": owner_id,
+        "profile_id": payload.get("profile_id"),
         "client_name": payload.get("client_name", "غير محدد"),
         "phone_number": payload.get("phone_number"),
         "property_id": payload.get("property_id", ""),
@@ -1246,17 +1249,79 @@ async def get_client_offers_db(owner_id: str, limit: int = 200) -> List[Dict[str
 
 
 async def get_client_offers_by_client_db(
-    owner_id: str, client_name: str, phone_number: Optional[str] = None
+    owner_id: str,
+    client_name: str,
+    phone_number: Optional[str] = None,
+    profile_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Get all offers for a specific client (case-insensitive client name matching)."""
-    # Use case-insensitive regex for client_name matching
-    query: Dict[str, Any] = {
-        "owner_id": owner_id,
-        "client_name": {"$regex": f"^{client_name}$", "$options": "i"}
-    }
-    if phone_number:
-        query["phone_number"] = {"$regex": f"^{phone_number}$", "$options": "i"}
+    """Get offers for a client: by profile_id, legacy rows without profile_id, and same identity (name/phone) even if profile_id was wrong or duplicated."""
     items: List[Dict[str, Any]] = []
+
+    if profile_id:
+        profile_doc: Optional[Dict[str, Any]] = None
+        try:
+            pid_oid = ObjectId(profile_id)
+            profile_doc = await client_profile_collection.find_one({"_id": pid_oid, "owner_id": owner_id})
+        except (InvalidId, TypeError):
+            profile_doc = None
+
+        effective_name = (profile_doc.get("client_name") if profile_doc else None) or client_name or ""
+        eff_phone = phone_number
+        if (not eff_phone or not str(eff_phone).strip()) and profile_doc:
+            eff_phone = profile_doc.get("phone_number")
+
+        safe_name = re.escape((effective_name or "").strip())
+        name_regex = {"$regex": f"^{safe_name}$", "$options": "i"}
+
+        phone_clause: Dict[str, Any] = {}
+        identity_phone_clause: Dict[str, Any] = {}
+        if eff_phone and str(eff_phone).strip():
+            safe_phone = re.escape(str(eff_phone).strip())
+            prx = {"$regex": f"^{safe_phone}$", "$options": "i"}
+            phone_clause = {"phone_number": prx}
+            identity_phone_clause = {"phone_number": prx}
+
+        legacy_no_profile = {
+            "$or": [
+                {"profile_id": None},
+                {"profile_id": ""},
+                {"profile_id": {"$exists": False}},
+            ]
+        }
+        legacy: Dict[str, Any] = {
+            "owner_id": owner_id,
+            "client_name": name_regex,
+            **phone_clause,
+            **legacy_no_profile,
+        }
+        # Same person: all offers with this canonical name/phone (even wrong/duplicate profile_id on the row)
+        identity_match: Dict[str, Any] = {
+            "owner_id": owner_id,
+            "client_name": name_regex,
+            **identity_phone_clause,
+        }
+        or_clauses: List[Dict[str, Any]] = [
+            {"profile_id": profile_id},
+            legacy,
+        ]
+        # Avoid name-only identity (too broad); with phone we include rows tied to wrong/duplicate profile_id
+        if identity_phone_clause:
+            or_clauses.append(identity_match)
+        query = {
+            "owner_id": owner_id,
+            "$or": or_clauses,
+        }
+    else:
+        safe_name = re.escape((client_name or "").strip())
+        name_regex = {"$regex": f"^{safe_name}$", "$options": "i"}
+        query = {
+            "owner_id": owner_id,
+            "client_name": name_regex,
+        }
+        if phone_number and str(phone_number).strip():
+            safe_phone = re.escape(str(phone_number).strip())
+            query["phone_number"] = {"$regex": f"^{safe_phone}$", "$options": "i"}
+
     async for row in client_offer_collection.find(query).sort("_id", -1):
         items.append(client_offer_helper(row))
     return items
@@ -1393,15 +1458,26 @@ def client_profile_helper(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _sanitize_client_types_lane(types: Any) -> List[str]:
+    """At most one of request/offer — never both on the same profile document."""
+    raw = [str(t) for t in (types or []) if t in ("request", "offer")]
+    if not raw:
+        return []
+    if "request" in raw and "offer" in raw:
+        return [raw[0]]
+    return list(dict.fromkeys(raw))
+
+
 async def create_client_profile_db(owner_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Create a new client profile (independent from requests/offers)."""
     now = datetime.utcnow()
+    client_types = _sanitize_client_types_lane(payload.get("client_types"))
     doc = {
         "owner_id": owner_id,
         "client_name": payload.get("client_name", ""),
         "phone_number": payload.get("phone_number"),
         "notes": payload.get("notes", ""),
-        "client_types": payload.get("client_types") or [],
+        "client_types": client_types,
         "assigned_user_id": payload.get("assigned_user_id"),
         "assigned_user_name": payload.get("assigned_user_name"),
         "created_at": now,
@@ -1427,9 +1503,17 @@ async def get_client_profiles_db(
                          "offer" -> profiles with "offer" in client_types
     """
     query: Dict[str, Any] = {"owner_id": owner_id}
-    
-    if client_type_filter in ("request", "offer"):
-        query["client_types"] = {"$in": [client_type_filter]}
+
+    if client_type_filter == "offer":
+        query = {
+            "$and": [
+                {"owner_id": owner_id},
+                {"client_types": {"$in": ["offer"]}},
+                {"client_types": {"$nin": ["request"]}},
+            ]
+        }
+    elif client_type_filter == "request":
+        query = {"owner_id": owner_id, "client_types": {"$in": ["request"]}}
     
     items: List[Dict[str, Any]] = []
     async for row in client_profile_collection.find(query).sort("_id", -1).limit(limit):
@@ -1458,6 +1542,8 @@ async def update_client_profile_db(
     if not updates:
         found = await client_profile_collection.find_one({"_id": oid, "owner_id": owner_id})
         return client_profile_helper(found) if found else None
+    if "client_types" in updates and updates["client_types"] is not None:
+        updates["client_types"] = _sanitize_client_types_lane(updates["client_types"])
     updates["updated_at"] = datetime.utcnow()
     updated = await client_profile_collection.find_one_and_update(
         {"_id": oid, "owner_id": owner_id},
@@ -1479,13 +1565,23 @@ async def delete_client_profile_db(owner_id: str, profile_id: str) -> bool:
 
 async def get_client_profiles_by_type_db(owner_id: str, client_type: str, limit: int = 200) -> List[Dict[str, Any]]:
     """
-    Get client profiles filtered by client_type.
-    client_type should be "request" or "offer".
+    Profiles for the Requests vs Offers tabs — lanes stay separate.
+
+    - offer tab: profiles that have "offer" and do NOT have "request" (no merged rows).
+    - request tab: profiles that have "request" (includes legacy merged so they stay manageable).
     """
     query: Dict[str, Any] = {"owner_id": owner_id}
-    if client_type in ("request", "offer"):
-        query["client_types"] = {"$in": [client_type]}
-    
+    if client_type == "offer":
+        query = {
+            "$and": [
+                {"owner_id": owner_id},
+                {"client_types": {"$in": ["offer"]}},
+                {"client_types": {"$nin": ["request"]}},
+            ]
+        }
+    elif client_type == "request":
+        query = {"owner_id": owner_id, "client_types": {"$in": ["request"]}}
+
     items: List[Dict[str, Any]] = []
     async for row in client_profile_collection.find(query).sort("_id", -1).limit(limit):
         items.append(client_profile_helper(row))
@@ -1530,6 +1626,10 @@ async def add_client_type_to_profile_db(
         return None
     
     current_types = current.get("client_types") or []
+    if client_type == "request" and "offer" in current_types:
+        return client_profile_helper(current)
+    if client_type == "offer" and "request" in current_types:
+        return client_profile_helper(current)
     if client_type not in current_types:
         current_types.append(client_type)
     
@@ -1548,18 +1648,38 @@ async def get_or_create_client_profile_with_type_db(
     client_type: str
 ) -> Dict[str, Any]:
     """
-    Find existing client profile or create new one with specified client_type.
-    If profile exists, merge the new type (don't overwrite existing types).
+    Find existing client profile in the same "lane" as client_type, or create a new one.
+
+    Request and offer lanes are isolated: same name + phone can have one profile for
+    requests and a separate profile for offers (no merging across lanes).
     """
-    # Build query for finding existing profile
-    query: Dict[str, Any] = {
-        "owner_id": owner_id,
-        "client_name": {"$regex": f"^{client_name}$", "$options": "i"}
-    }
-    if phone_number:
-        query["phone_number"] = {"$regex": f"^{phone_number}$", "$options": "i"}
-    
-    # Try to find existing profile
+    safe_name = re.escape((client_name or "").strip())
+    name_clause = {"client_name": {"$regex": f"^{safe_name}$", "$options": "i"}}
+    base: Dict[str, Any] = {"owner_id": owner_id, **name_clause}
+    if phone_number and str(phone_number).strip():
+        safe_phone = re.escape(str(phone_number).strip())
+        base["phone_number"] = {"$regex": f"^{safe_phone}$", "$options": "i"}
+
+    # Only reuse a profile that already belongs to this lane (never merge request ↔ offer)
+    if client_type == "offer":
+        query: Dict[str, Any] = {
+            "$and": [
+                base,
+                {"client_types": {"$in": ["offer"]}},
+                {"client_types": {"$nin": ["request"]}},
+            ]
+        }
+    elif client_type == "request":
+        query = {
+            "$and": [
+                base,
+                {"client_types": {"$in": ["request"]}},
+                {"client_types": {"$nin": ["offer"]}},
+            ]
+        }
+    else:
+        query = {**base, "client_types": {"$in": [client_type]}}
+
     existing = await client_profile_collection.find_one(query)
     if existing:
         # Profile exists - merge the new client_type
@@ -1590,24 +1710,181 @@ async def get_or_create_client_profile_with_type_db(
     return client_profile_helper(saved or doc)
 
 
-async def get_client_profiles_by_type_db(
-    owner_id: str, 
-    client_type: str,
-    limit: int = 200
-) -> List[Dict[str, Any]]:
+# ===== Historical Stats for Real Percentages =====
+
+
+async def get_client_offers_stats_db(owner_id: str) -> Dict[str, Any]:
     """
-    Get client profiles filtered by client_type.
-    client_type: "request" or "offer"
-    Returns profiles where client_types includes the type.
+    Get client offers statistics with percentage change (compared to 30 days ago).
+    Returns current count and percentage change.
     """
-    query: Dict[str, Any] = {"owner_id": owner_id}
-    if client_type in ("request", "offer"):
-        query["client_types"] = {"$in": [client_type]}
+    now = datetime.utcnow()
+    thirty_days_ago = now - timedelta(days=30)
     
-    items: List[Dict[str, Any]] = []
-    async for row in client_profile_collection.find(query).sort("_id", -1).limit(limit):
-        items.append(client_profile_helper(row))
-    return items
+    # Current total offers count
+    current_total = await client_offer_collection.count_documents({"owner_id": owner_id})
+    
+    # Count offers created in the last 30 days
+    last_30_days_count = await client_offer_collection.count_documents({
+        "owner_id": owner_id,
+        "created_at": {"$gte": thirty_days_ago}
+    })
+    
+    # Count offers created before 30 days ago (for comparison)
+    before_30_days = await client_offer_collection.count_documents({
+        "owner_id": owner_id,
+        "created_at": {"$lt": thirty_days_ago}
+    })
+    
+    # Calculate percentage change: new offers in last 30 days compared to total before 30 days
+    if before_30_days > 0:
+        percentage_change = round((last_30_days_count / before_30_days) * 100, 1)
+    else:
+        # If no offers before 30 days, calculate vs current (if there's any)
+        percentage_change = round((last_30_days_count / max(current_total, 1)) * 100, 1) if current_total > 0 else 0
+    
+    # Active offers count (not closed)
+    active_count = await client_offer_collection.count_documents({
+        "owner_id": owner_id,
+        "status": {"$ne": "closed"}
+    })
+    
+    # Count active offers from 30 days ago
+    active_before_30 = await client_offer_collection.count_documents({
+        "owner_id": owner_id,
+        "status": {"$ne": "closed"},
+        "created_at": {"$lt": thirty_days_ago}
+    })
+    
+    # Calculate active percentage change
+    if active_before_30 > 0:
+        active_percentage = round(((active_count - active_before_30) / active_before_30) * 100, 1)
+    else:
+        active_percentage = round((active_count / max(active_count, 1)) * 100, 1) if active_count > 0 else 0
+    
+    return {
+        "total_offers": current_total,
+        "active_offers": active_count,
+        "new_last_30_days": last_30_days_count,
+        "percentage_change": percentage_change,
+        "active_percentage_change": active_percentage,
+    }
+
+
+async def get_client_requests_stats_db(owner_id: str) -> Dict[str, Any]:
+    """
+    Get client requests statistics with percentage change (compared to 30 days ago).
+    Returns current count and percentage change.
+    """
+    now = datetime.utcnow()
+    thirty_days_ago = now - timedelta(days=30)
+    
+    # Current total requests count
+    current_total = await client_request_collection.count_documents({"owner_id": owner_id})
+    
+    # Count requests created in the last 30 days
+    last_30_days_count = await client_request_collection.count_documents({
+        "owner_id": owner_id,
+        "created_at": {"$gte": thirty_days_ago}
+    })
+    
+    # Count requests created before 30 days ago (for comparison)
+    before_30_days = await client_request_collection.count_documents({
+        "owner_id": owner_id,
+        "created_at": {"$lt": thirty_days_ago}
+    })
+    
+    # Calculate percentage change: new requests in last 30 days compared to total before 30 days
+    if before_30_days > 0:
+        percentage_change = round((last_30_days_count / before_30_days) * 100, 1)
+    else:
+        # If no requests before 30 days, calculate vs current (if there's any)
+        percentage_change = round((last_30_days_count / max(current_total, 1)) * 100, 1) if current_total > 0 else 0
+    
+    # Active requests count (not closed)
+    active_count = await client_request_collection.count_documents({
+        "owner_id": owner_id,
+        "status": {"$ne": "closed"}
+    })
+    
+    # Count active requests from 30 days ago
+    active_before_30 = await client_request_collection.count_documents({
+        "owner_id": owner_id,
+        "status": {"$ne": "closed"},
+        "created_at": {"$lt": thirty_days_ago}
+    })
+    
+    # Calculate active percentage change
+    if active_before_30 > 0:
+        active_percentage = round(((active_count - active_before_30) / active_before_30) * 100, 1)
+    else:
+        active_percentage = round((active_count / max(active_count, 1)) * 100, 1) if active_count > 0 else 0
+    
+    # New requests count (status = new)
+    new_count = await client_request_collection.count_documents({
+        "owner_id": owner_id,
+        "status": "new"
+    })
+    
+    # Count new requests from 30 days ago
+    new_before_30 = await client_request_collection.count_documents({
+        "owner_id": owner_id,
+        "status": "new",
+        "created_at": {"$lt": thirty_days_ago}
+    })
+    
+    # Calculate new percentage change
+    if new_before_30 > 0:
+        new_percentage = round(((new_count - new_before_30) / new_before_30) * 100, 1)
+    else:
+        new_percentage = round((new_count / max(new_count, 1)) * 100, 1) if new_count > 0 else 0
+    
+    return {
+        "total_requests": current_total,
+        "active_requests": active_count,
+        "new_requests": new_count,
+        "new_last_30_days": last_30_days_count,
+        "percentage_change": percentage_change,
+        "active_percentage_change": active_percentage,
+        "new_percentage_change": new_percentage,
+    }
+
+
+async def get_client_profiles_stats_db(owner_id: str) -> Dict[str, Any]:
+    """
+    Get client profiles statistics with percentage change (compared to 30 days ago).
+    Returns current count and percentage change.
+    """
+    now = datetime.utcnow()
+    thirty_days_ago = now - timedelta(days=30)
+    
+    # Current total profiles count
+    current_total = await client_profile_collection.count_documents({"owner_id": owner_id})
+    
+    # Count profiles created in the last 30 days
+    last_30_days_count = await client_profile_collection.count_documents({
+        "owner_id": owner_id,
+        "created_at": {"$gte": thirty_days_ago}
+    })
+    
+    # Count profiles created before 30 days ago (for comparison)
+    before_30_days = await client_profile_collection.count_documents({
+        "owner_id": owner_id,
+        "created_at": {"$lt": thirty_days_ago}
+    })
+    
+    # Calculate percentage change: new profiles in last 30 days compared to total before 30 days
+    if before_30_days > 0:
+        percentage_change = round((last_30_days_count / before_30_days) * 100, 1)
+    else:
+        # If no profiles before 30 days, calculate vs current (if there's any)
+        percentage_change = round((last_30_days_count / max(current_total, 1)) * 100, 1) if current_total > 0 else 0
+    
+    return {
+        "total_clients": current_total,
+        "new_last_30_days": last_30_days_count,
+        "percentage_change": percentage_change,
+    }
 
 
 # ===== Appointments =====

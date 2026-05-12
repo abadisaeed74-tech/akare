@@ -293,10 +293,11 @@ class DashboardOverview(BaseModel):
 
 class ClientRequestInput(BaseModel):
     raw_text: str
+    follow_up_details: Optional[str] = None
+
+    profile_id: Optional[str] = None
     client_name: Optional[str] = None
     phone_number: Optional[str] = None
-    # NEW: Follow-up details - what the employee will do with the client
-    follow_up_details: Optional[str] = None
 
 
 class ClientRequestPublic(BaseModel):
@@ -379,6 +380,7 @@ class ClientNoteUpdate(BaseModel):
 
 
 class ClientOfferInput(BaseModel):
+    profile_id: Optional[str] = None
     client_name: str = "غير محدد"
     phone_number: Optional[str] = None
     property_id: str
@@ -389,6 +391,7 @@ class ClientOfferInput(BaseModel):
 class ClientOfferPublic(BaseModel):
     id: str
     owner_id: str
+    profile_id: Optional[str] = None
     client_name: str = "غير محدد"
     phone_number: Optional[str] = None
     property_id: str

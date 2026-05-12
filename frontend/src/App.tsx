@@ -721,7 +721,17 @@ onClick={() => handleSectionChange('properties')}
                                                                 borderRadius: 8,
                                                                 cursor: 'pointer',
                                                             }}
-                                                            onClick={() => navigate(`/app/clients/${encodeURIComponent(clientKey)}`, { state: { clientSourceTab: types.includes('offer') ? 'offers' : 'requests' } })}
+                                                            onClick={() =>
+                                                                navigate(
+                                                                    `/app/clients/${encodeURIComponent(clientKey)}?profile_id=${encodeURIComponent(client.id)}`,
+                                                                    {
+                                                                        state: {
+                                                                            clientSourceTab: types.includes('offer')
+                                                                                ? 'offers'
+                                                                                : 'requests',
+                                                                        },
+                                                                    },
+                                                                )}
                                                         >
                                                             <Space size={8}>
                                                                 <Avatar size="small" icon={<UserOutlined />} style={{ background: '#e6f4ea' }} />

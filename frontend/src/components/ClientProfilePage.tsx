@@ -35,7 +35,7 @@ import {
   ClockCircleOutlined,
   ArrowRightOutlined,
 } from '@ant-design/icons';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -48,7 +48,7 @@ import {
   setAuthToken,
   getClientRequestMatches,
   resolveMediaUrl,
-  createClientRequestWithClient,
+  createClientRequest,
   getClientNotes,
   createClientNote,
   deleteClientNote,
@@ -60,10 +60,12 @@ import {
   getClientOfferNotes,
   createClientOfferNote,
   deleteClientOfferNote,
-getClientOffer,
+  getClientOffer,
   getClientProfileByClient,
+  getClientProfile,
   deleteClientProfile,
   type ClientRequest,
+  type ClientOffer,
   type Property,
   type ClientNote,
   type ClientProfile,
@@ -93,7 +95,43 @@ dayjs.extend(timezone);
 
 const SAUDI_TZ = 'Asia/Riyadh';
 
-// Helper to format deadline showing remaining time
+const normalizeOfferIdentity = (v: string | null | undefined) => (v ?? '').trim().toLowerCase();
+
+const digitsOnly = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '');
+
+const phonesLooseEqual = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const da = digitsOnly(a);
+  const db = digitsOnly(b);
+  if (!da && !db) return true;
+  if (!da || !db) return false;
+  if (da === db) return true;
+  if (da.length >= 9 && db.length >= 9 && da.slice(-9) === db.slice(-9)) return true;
+  return false;
+};
+
+/** Same client row: exact profile_id match, or same name + phone (fixes legacy wrong/duplicate profile_id). */
+const offerMatchesClientProfile = (offer: ClientOffer, p: ClientProfile): boolean => {
+  if (offer.profile_id === p.id) return true;
+  const nameMatch =
+    normalizeOfferIdentity(offer.client_name) === normalizeOfferIdentity(p.client_name);
+  if (!nameMatch) return false;
+  return phonesLooseEqual(offer.phone_number, p.phone_number);
+};
+
+const offerMatchesIdentityStrings = (
+  offer: ClientOffer,
+  clientName: string,
+  phone: string | null,
+): boolean =>
+  normalizeOfferIdentity(offer.client_name) === normalizeOfferIdentity(clientName) &&
+  phonesLooseEqual(offer.phone_number, phone);
+
+const phoneFromUrlForLookup = (raw: string): string | null => {
+  const t = raw.trim();
+  if (!t || t === 'غير متوفر') return null;
+  return t;
+};
+
 // Helper to format deadline showing remaining time
 const formatDeadlineDisplay = (isoString: string | null): string | null => {
   if (!isoString) return null;
@@ -170,6 +208,8 @@ const getReminderTypeLabel = (type?: string | null): string | undefined => {
 const ClientProfilePage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const profileIdParam = searchParams.get('profile_id')?.trim() || '';
   const { clientKey } = useParams();
   const decoded = decodeURIComponent(clientKey || '');
   const [name = 'غير محدد', phone = 'غير متوفر'] = decoded.split('|');
@@ -251,18 +291,27 @@ const load = useCallback(async () => {
       const properties = await getProperties({});
       setAllProperties(properties);
       
-      // Load persistent client profile (new!)
+      // Load persistent client profile: prefer stable id from URL (?profile_id=) then name/phone
+      const profileIdFromQuery = profileIdParam || null;
+      let resolvedProfile: ClientProfile | null = null;
       try {
-        const phoneParam = phone.trim() || undefined;
-        const profile = await getClientProfileByClient(name.trim(), phoneParam || null);
-        if (profile) {
-          setClientProfile(profile);
+        if (profileIdFromQuery) {
+          try {
+            resolvedProfile = await getClientProfile(profileIdFromQuery);
+          } catch {
+            resolvedProfile = null;
+          }
+        }
+        if (!resolvedProfile) {
+          const phoneLookup = phoneFromUrlForLookup(phone);
+          resolvedProfile = await getClientProfileByClient(name.trim(), phoneLookup);
         }
       } catch (e) {
         console.error('Error loading client profile:', e);
-        // Continue even if profile loading fails
+        resolvedProfile = null;
       }
-      
+      setClientProfile(resolvedProfile);
+
       // Load client requests
       const all = await getClientRequests();
       const filtered = all
@@ -272,8 +321,22 @@ const load = useCallback(async () => {
 
 // Load client offers with properties
       try {
-        const phoneParam = phone.trim() || null;
-        const offersData = await getClientOffersByClient(name.trim(), phoneParam);
+        const phoneParam = phoneFromUrlForLookup(phone);
+        const effectiveProfileId = resolvedProfile?.id ?? profileIdFromQuery ?? null;
+        const rawOffers = await getClientOffersByClient(
+          name.trim(),
+          phoneParam,
+          effectiveProfileId,
+        );
+        const offersData = resolvedProfile
+          ? rawOffers.filter((o) => offerMatchesClientProfile(o, resolvedProfile))
+          : profileIdFromQuery
+            ? rawOffers.filter(
+                (o) =>
+                  o.profile_id === profileIdFromQuery ||
+                  offerMatchesIdentityStrings(o, name.trim(), phoneParam),
+              )
+            : rawOffers;
         // Build property map for all properties
         const propertyMap = new Map<string, Property>();
         for (const p of properties) {
@@ -304,7 +367,7 @@ const load = useCallback(async () => {
     } finally {
       setLoading(false);
     }
-  }, [clientKey, name, phone]);
+  }, [clientKey, name, phone, profileIdParam]);
 
 useEffect(() => {
     load();
@@ -415,8 +478,13 @@ const handleLogout = () => {
     }
     try {
       // Delete all offers for this client first
-      const phoneParam = phone.trim() || null;
-      const offersData = await getClientOffersByClient(name.trim(), phoneParam);
+      const phoneParam = phoneFromUrlForLookup(phone);
+      const rawOffers = await getClientOffersByClient(
+        name.trim(),
+        phoneParam,
+        clientProfile.id,
+      );
+      const offersData = rawOffers.filter((o) => offerMatchesClientProfile(o, clientProfile));
       if (offersData.length > 0) {
         await Promise.all(offersData.map((offer) => deleteClientOffer(offer.id)));
       }
@@ -434,8 +502,13 @@ const handleLogout = () => {
     try {
       const values = await createForm.validateFields();
       setCreating(true);
-      // Use createClientRequestWithClient to associate with current client
-      await createClientRequestWithClient(values.raw_text, name, phone);
+// Link the request to the client profile using profile_id
+      await createClientRequest({
+        raw_text: values.raw_text,
+        profile_id: clientProfile?.id,
+        client_name: name,
+        phone_number: phone || undefined,
+      });
       message.success('تم تحليل الطلب وإضافته بنجاح.');
       createForm.resetFields();
       setCreateModalOpen(false);
@@ -1438,7 +1511,8 @@ style={{ position: 'absolute', top: 8, left: 8 }}
                       style={{ borderRadius: 10, cursor: 'pointer' }}
                       onClick={async () => {
                         try {
-                          await createClientOffer({
+await createClientOffer({
+                            profile_id: clientProfile?.id,
                             client_name: name,
                             phone_number: phone || null,
                             property_id: property.id!,

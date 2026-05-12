@@ -530,22 +530,13 @@ export const updateInquiryStatus = async (
   return response.data;
 };
 
-export const createClientRequest = async (raw_text: string): Promise<ClientRequest> => {
-  const response = await apiClient.post('/clients', { raw_text });
-  return response.data;
-};
-
-// Create client request with pre-filled client info (for client profile page)
-export const createClientRequestWithClient = async (
-  raw_text: string,
-  client_name: string,
-  phone_number?: string | null,
-): Promise<ClientRequest> => {
-  const response = await apiClient.post('/clients', { 
-    raw_text,
-    client_name,
-    phone_number: phone_number || null,
-  });
+export const createClientRequest = async (data: {
+  raw_text: string;
+  profile_id?: string;
+  client_name?: string;
+  phone_number?: string | null;
+}): Promise<ClientRequest> => {
+  const response = await apiClient.post('/clients', data);
   return response.data;
 };
 
@@ -633,6 +624,7 @@ export const deleteClientNote = async (requestId: string, noteId: string): Promi
 export interface ClientOffer {
   id: string;
   owner_id: string;
+  profile_id?: string | null;
   client_name: string;
   phone_number?: string | null;
   property_id: string;
@@ -647,6 +639,7 @@ export interface ClientOffer {
 }
 
 export const createClientOffer = async (payload: {
+  profile_id?: string | null;
   client_name: string;
   phone_number?: string | null;
   property_id: string;
@@ -663,10 +656,12 @@ export const getClientOffers = async (): Promise<ClientOffer[]> => {
 
 export const getClientOffersByClient = async (
   clientName: string,
-  phoneNumber?: string | null
+  phoneNumber?: string | null,
+  profileId?: string | null,
 ): Promise<ClientOffer[]> => {
   const params: any = { client_name: clientName };
   if (phoneNumber) params.phone_number = phoneNumber;
+  if (profileId) params.profile_id = profileId;
   const response = await apiClient.get('/clients/offers/by-client', { params });
   return response.data;
 };
@@ -781,6 +776,18 @@ export const getClientProfilesByType = async (clientType: 'request' | 'offer'): 
   return response.data;
 };
 
+const digitsOnly = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '');
+
+const phonesLooseEqual = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const da = digitsOnly(a);
+  const db = digitsOnly(b);
+  if (!da && !db) return true;
+  if (!da || !db) return false;
+  if (da === db) return true;
+  if (da.length >= 9 && db.length >= 9 && da.slice(-9) === db.slice(-9)) return true;
+  return false;
+};
+
 // NEW: Get client profile by client name and phone (for client profile page)
 // This fetches the persistent client profile for a client
 export const getClientProfileByClient = async (
@@ -792,12 +799,22 @@ export const getClientProfileByClient = async (
     if (phoneNumber) params.phone_number = phoneNumber;
     const response = await apiClient.get('/clients/profiles', { params });
     const profiles = response.data as ClientProfile[];
-    // Find matching profile by name and phone
-    const profile = profiles.find(p => 
-      p.client_name?.toLowerCase() === clientName.toLowerCase() &&
-      (phoneNumber ? p.phone_number === phoneNumber : !p.phone_number)
+    const targetName = (clientName || '').trim().toLowerCase();
+    const withName = profiles.filter(
+      (p) => (p.client_name || '').trim().toLowerCase() === targetName,
     );
-    return profile || null;
+    if (!withName.length) return null;
+
+    const phone = phoneNumber != null ? String(phoneNumber).trim() : '';
+    if (!phone) {
+      const noPhone = withName.filter((p) => !digitsOnly(p.phone_number));
+      if (noPhone.length === 1) return noPhone[0];
+      if (withName.length === 1) return withName[0];
+      return noPhone[0] ?? withName[0] ?? null;
+    }
+
+    const byLoosePhone = withName.find((p) => phonesLooseEqual(p.phone_number, phone));
+    return byLoosePhone ?? withName[0] ?? null;
   } catch {
     return null;
   }
@@ -820,6 +837,48 @@ export const updateClientProfile = async (
 
 export const deleteClientProfile = async (profileId: string): Promise<void> => {
   await apiClient.delete(`/clients/profiles/${profileId}`);
+};
+
+// ===== Client Stats API =====
+
+export interface ClientOffersStats {
+  total_offers: number;
+  active_offers: number;
+  new_last_30_days: number;
+  percentage_change: number;
+  active_percentage_change: number;
+  new_percentage_change: number;
+}
+
+export interface ClientRequestsStats {
+  total_requests: number;
+  active_requests: number;
+  new_requests: number;
+  new_last_30_days: number;
+  percentage_change: number;
+  active_percentage_change: number;
+  new_percentage_change: number;
+}
+
+export interface ClientProfilesStats {
+  total_clients: number;
+  new_last_30_days: number;
+  percentage_change: number;
+}
+
+export const getClientOffersStats = async (): Promise<ClientOffersStats> => {
+  const response = await apiClient.get('/clients/offers/stats');
+  return response.data;
+};
+
+export const getClientRequestsStats = async (): Promise<ClientRequestsStats> => {
+  const response = await apiClient.get('/clients/requests/stats');
+  return response.data;
+};
+
+export const getClientProfilesStats = async (): Promise<ClientProfilesStats> => {
+  const response = await apiClient.get('/clients/profiles/stats');
+  return response.data;
 };
 
 export const resolveMediaUrl = (path: string): string => {

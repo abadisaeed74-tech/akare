@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query, Depends, UploadFile, File, Request, Header, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
@@ -118,9 +119,12 @@ from database import (
     get_client_profiles_db,
     get_client_profile_by_id_db,
     update_client_profile_db,
-    delete_client_profile_db,
+delete_client_profile_db,
     get_or_create_client_profile_with_type_db,
     get_client_profiles_by_type_db,
+    get_client_offers_stats_db,
+    get_client_requests_stats_db,
+    get_client_profiles_stats_db,
 )
 
 
@@ -1596,9 +1600,10 @@ async def create_client_request_endpoint(
             return None
 
     doc = {
+        "profile_id": payload.profile_id,
         "raw_text": text,
-        "client_name": str(processed.get("client_name") or "غير محدد").strip() or "غير محدد",
-        "phone_number": str(processed.get("phone_number")).strip() if processed.get("phone_number") else None,
+        "client_name": payload.client_name or str(processed.get("client_name") or "غير محدد").strip() or "غير محدد",
+        "phone_number": payload.phone_number or (str(processed.get("phone_number")).strip() if processed.get("phone_number") else None),
         "property_type": str(processed.get("property_type") or "غير محدد").strip() or "غير محدد",
         "city": normalize_city(str(processed.get("city") or "غير محدد").strip() or "غير محدد"),
         "neighborhoods": neighborhoods,
@@ -1889,14 +1894,18 @@ async def create_client_offer(
         if not property_item or property_item.get("owner_id") != owner_id:
             raise HTTPException(status_code=404, detail="العقار غير موجود.")
 
-    await get_or_create_client_profile_with_type_db(
-        owner_id,
-        payload.client_name,
-        payload.phone_number,
-        "offer",
-    )
+    # Ensure an offer-lane profile exists only when the client did not send profile_id
+    # (avoids merging "offer" into an existing request-only profile with the same name/phone).
+    if not (payload.profile_id and str(payload.profile_id).strip()):
+        await get_or_create_client_profile_with_type_db(
+            owner_id,
+            payload.client_name,
+            payload.phone_number,
+            "offer",
+        )
 
     offer = await create_client_offer_db(owner_id, {
+        "profile_id": payload.profile_id,
         "client_name": payload.client_name,
         "phone_number": payload.phone_number,
         "property_id": payload.property_id,
@@ -1909,12 +1918,13 @@ async def create_client_offer(
 async def get_client_offers_by_client(
     client_name: str = Query(..., min_length=1),
     phone_number: Optional[str] = Query(None),
+    profile_id: Optional[str] = Query(None),
     current_user: UserPublic = Depends(get_current_user),
 ):
     owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
     if not owner_id:
         return []
-    offers = await get_client_offers_by_client_db(owner_id, client_name, phone_number)
+    offers = await get_client_offers_by_client_db(owner_id, client_name, phone_number, profile_id)
     return [ClientOfferPublic(**o) for o in offers]
 
 
@@ -2125,6 +2135,72 @@ async def delete_client_profile(
     if not deleted:
         raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
     return None
+
+
+# ===== Client Stats Endpoints =====
+
+
+class ClientOffersStatsResponse(BaseModel):
+    total_offers: int
+    active_offers: int
+    new_last_30_days: int
+    percentage_change: float
+    active_percentage_change: float
+
+
+class ClientRequestsStatsResponse(BaseModel):
+    total_requests: int
+    active_requests: int
+    new_requests: int
+    new_last_30_days: int
+    percentage_change: float
+    active_percentage_change: float
+    new_percentage_change: float
+
+
+class ClientProfilesStatsResponse(BaseModel):
+    total_clients: int
+    new_last_30_days: int
+    percentage_change: float
+
+
+@app.get("/clients/offers/stats", response_model=ClientOffersStatsResponse)
+async def get_client_offers_stats(current_user: UserPublic = Depends(get_current_user)):
+    """
+    Get client offers statistics with real data and percentage change.
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return ClientOffersStatsResponse(total_offers=0, active_offers=0, new_last_30_days=0, percentage_change=0.0, active_percentage_change=0.0)
+    
+    stats = await get_client_offers_stats_db(owner_id)
+    return ClientOffersStatsResponse(**stats)
+
+
+@app.get("/clients/requests/stats", response_model=ClientRequestsStatsResponse)
+async def get_client_requests_stats(current_user: UserPublic = Depends(get_current_user)):
+    """
+    Get client requests statistics with real data and percentage change.
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return ClientRequestsStatsResponse(total_requests=0, active_requests=0, new_requests=0, new_last_30_days=0, percentage_change=0.0, active_percentage_change=0.0, new_percentage_change=0.0)
+    
+    stats = await get_client_requests_stats_db(owner_id)
+    return ClientRequestsStatsResponse(**stats)
+
+
+@app.get("/clients/profiles/stats", response_model=ClientProfilesStatsResponse)
+async def get_client_profiles_stats(current_user: UserPublic = Depends(get_current_user)):
+    """
+    Get client profiles statistics with real data and percentage change.
+    """
+    owner_id = current_user.id if current_user.role == "owner" else current_user.company_owner_id
+    if not owner_id:
+        return ClientProfilesStatsResponse(total_clients=0, new_last_30_days=0, percentage_change=0.0)
+    
+    stats = await get_client_profiles_stats_db(owner_id)
+    return ClientProfilesStatsResponse(**stats)
 
 
 @app.get("/public/companies/{owner_id}", response_model=CompanySettings)

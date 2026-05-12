@@ -1,42 +1,28 @@
-# TODO: Modify Plan Descriptions and UI (Frontend Only)
+# TODO - Fix Client Requests Profile Linking
 
-## Task
-Modify plan descriptions and visual display in Akare platform (Frontend UI only)
-- No backend logic changes
-- No Stripe changes
-- No database changes
+## Status: ✅ COMPLETED
 
----
+### Changes Made:
 
-## Files Edited
+1. **backend/models.py** ✅
+   - Added `profile_id: Optional[str] = None` to `ClientRequestInput`
+   - Rearranged fields for better organization
 
-### 1. LandingPage.tsx ✅
-- [x] Update pricingPlans array with new descriptions
-- [x] Make Business plan visually prominent
-- [x] Add badge for "الأكثر استخدامًا"
+2. **backend/main.py** ✅
+   - Added `"profile_id": payload.profile_id,` to doc dict
+   - Changed `client_name` to use `payload.client_name` first, then AI-processed value
+   - Changed `phone_number` to use `payload.phone_number` first, then AI-processed value
 
-### 2. SettingsPage.tsx ✅
-- [x] Update PLANS array with new descriptions
-- [x] Update renderPlansSection for better visual display
-- [x] Add badge for Business plan
-
-### 3. api.ts ✅
-- [x] Added optional description and badge fields to PlanInfo interface
+### Verification ✅
+- Backend Python syntax: PASSED
+- Frontend TypeScript: PASSED (no errors)
 
 ---
 
-## Completed Changes
+## Summary
 
-### LandingPage.tsx
-- Starter (99 SAR): "مبتدئ" - suitable for small/medium offices
-- Business (199 SAR): "احترافي" - "الأكثر استخدامًا" badge
-- Enterprise (799 SAR): "مؤسسات" - unlimited users/properties
-
-### SettingsPage.tsx
-- Same plan naming
-- Visual badges for Business and Enterprise
-- Better feature descriptions ("موظفين بلا حدود", "عقارات بلا界限")
-
----
-
-## Status: COMPLETED ✅
+The implementation:
+- Links new client requests to client profiles using `profile_id`
+- Preserves backward compatibility (old requests work without profile_id)
+- Does not change any UI or routes
+- When a new client is created, the request will now appear in the client profile page immediately

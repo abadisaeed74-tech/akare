@@ -20,8 +20,8 @@ import {
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowUpOutlined, CloseOutlined, DeleteOutlined, FileTextOutlined, ShareAltOutlined, TeamOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
-import { getClientOffers, deleteClientOffer, createClientOffer, getProperties, resolveMediaUrl, getClientOfferNotes, createClientOfferNote, deleteClientOfferNote, updateClientOffer, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, type ClientOffer, type ClientProfile, type Property, type ClientNote, type TeamUser, type UserPublic } from '../services/api';
+import { ArrowUpOutlined, ArrowDownOutlined, CloseOutlined, DeleteOutlined, FileTextOutlined, ShareAltOutlined, TeamOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
+import { getClientOffers, deleteClientOffer, createClientOffer, getProperties, resolveMediaUrl, getClientOfferNotes, createClientOfferNote, deleteClientOfferNote, updateClientOffer, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, getClientOffersStats, type ClientOffer, type ClientProfile, type Property, type ClientNote, type TeamUser, type UserPublic } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -86,6 +86,18 @@ const formatActivity = (iso: string): string => {
 
 const normalizeIdentityPart = (value?: string | null): string => (value || '').trim().toLowerCase();
 
+const digitsOnly = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '');
+
+const phonesLooseEqual = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const da = digitsOnly(a);
+  const db = digitsOnly(b);
+  if (!da && !db) return true;
+  if (!da || !db) return false;
+  if (da === db) return true;
+  if (da.length >= 9 && db.length >= 9 && da.slice(-9) === db.slice(-9)) return true;
+  return false;
+};
+
 const profileKey = (profile: ClientProfile): string => (
   `${profile.client_name || 'غير محدد'}|${profile.phone_number || ''}`
 );
@@ -95,12 +107,11 @@ const getUserDisplayName = (user: TeamUser): string => (
 );
 
 const sameClientIdentity = (profile: ClientProfile, row: ClientOffer): boolean => {
-  const rowProfileId = (row as ClientOffer & { profile_id?: string | null; client_profile_id?: string | null }).profile_id
-    || (row as ClientOffer & { profile_id?: string | null; client_profile_id?: string | null }).client_profile_id;
-  if (rowProfileId && rowProfileId === profile.id) return true;
-
-  return normalizeIdentityPart(profile.client_name) === normalizeIdentityPart(row.client_name)
-    && normalizeIdentityPart(profile.phone_number) === normalizeIdentityPart(row.phone_number);
+  if (row.profile_id && row.profile_id === profile.id) return true;
+  const nameMatch =
+    normalizeIdentityPart(profile.client_name) === normalizeIdentityPart(row.client_name);
+  if (!nameMatch) return false;
+  return phonesLooseEqual(profile.phone_number, row.phone_number);
 };
 
 const mergeProfilesWithOffers = (
@@ -160,36 +171,40 @@ const ClientOffersPanel: React.FC<Props> = ({ loading = false, currentUser }) =>
   const navigate = useNavigate();
   const [clients, setClients] = useState<ClientOfferDataType[]>([]);
   const [allProperties, setAllProperties] = useState<Property[]>([]);
-const [deletingMap, setDeletingMap] = useState<Record<string, boolean>>({});
+  const [deletingMap, setDeletingMap] = useState<Record<string, boolean>>({});
   const [savingMap, setSavingMap] = useState<Record<string, boolean>>({});
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [assigningMap, setAssigningMap] = useState<Record<string, boolean>>({});
-  const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolean>>({});
+const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolean>>({});
   const canAssignEmployee = currentUser?.role === 'owner' || currentUser?.role === 'manager';
   const [creating, setCreating] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createForm] = Form.useForm();
+  // Real stats from API
+  const [offersStats, setOffersStats] = useState<{ total_offers: number; active_offers: number; new_last_30_days: number; percentage_change: number; active_percentage_change: number } | null>(null);
   // Notes state - per offer
   const [notesMap, setNotesMap] = useState<Record<string, ClientNote[]>>({});
   const [loadingNotesMap, setLoadingNotesMap] = useState<Record<string, boolean>>({});
   const [notesModalOpen, setNotesModalOpen] = useState(false);
   const [notesOfferId, setNotesOfferId] = useState<string | null>(null);
-const [newNoteContent, setNewNoteContent] = useState('');
+  const [newNoteContent, setNewNoteContent] = useState('');
   const [savingNote, setSavingNote] = useState(false);
 
-const loadData = async () => {
+  const loadData = async () => {
     try {
       // Load client offers + profiles with "offer" type (for Offers tab)
-      const [offersData, propertiesData, offerProfilesData, teamUsersData] = await Promise.all([
+      // Also load stats from API for real percentage changes
+      const [offersData, propertiesData, offerProfilesData, teamUsersData, statsData] = await Promise.all([
         getClientOffers(),
         getProperties({}),
         getClientProfilesByType('offer'),  // Get profiles with offer type
         getTeamUsers().catch(() => [] as TeamUser[]),
+        getClientOffersStats().catch(() => null),
       ]);
       setAllProperties(propertiesData);
       setTeamUsers(teamUsersData.filter((user) => user.status === 'active'));
-      
       setClients(mergeProfilesWithOffers(offerProfilesData, offersData, propertiesData, teamUsersData));
+      setOffersStats(statsData);
     } catch {
       message.error('تعذر تحميل العروض.');
     }
@@ -339,7 +354,7 @@ const handleCreate = async () => {
       
       // Create a persistent client profile with "offer" type (independent from offers)
       // This ensures the client persists even if all offers are deleted
-      await createClientProfile({
+      const createdProfile = await createClientProfile({
         client_name: values.client_name,
         phone_number: values.phone_number || undefined,
         notes: '',
@@ -349,6 +364,7 @@ const handleCreate = async () => {
       // If property is selected, create the offer
       if (values.property_id) {
         await createClientOffer({
+          profile_id: createdProfile.id,
           client_name: values.client_name,
           phone_number: values.phone_number || undefined,
           property_id: values.property_id,
@@ -406,6 +422,23 @@ const stats = useMemo(() => {
     return { totalClients, activeClients, totalOffers };
   }, [clients]);
 
+  // Format percentage for display
+  const formatPercentage = (value: number | undefined | null) => {
+    if (value === undefined || value === null || isNaN(value)) return '0%';
+    const fixed = Math.abs(value).toFixed(1);
+    return `${fixed}%`;
+  };
+
+  // Get percentage arrow and color
+  const getPercentageStyle = (value: number | undefined | null) => {
+    if (value === undefined || value === null || isNaN(value)) {
+      return { icon: <ArrowUpOutlined />, color: '#16a34a' }; // Default green
+    }
+    return value >= 0
+      ? { icon: <ArrowUpOutlined />, color: '#16a34a' }
+      : { icon: <ArrowDownOutlined />, color: '#dc2626' };
+  };
+
   const columns: ColumnsType<ClientOfferDataType> = [
     {
       title: 'العميل',
@@ -418,7 +451,11 @@ const stats = useMemo(() => {
           <Text
             strong
             style={{ fontSize: 12, cursor: 'pointer', color: '#1677ff' }}
-            onClick={() => navigate(`/app/clients/${encodeURIComponent(record.key)}`, { state: { clientSourceTab: 'offers' } })}
+            onClick={() =>
+              navigate(
+                `/app/clients/${encodeURIComponent(record.key)}?profile_id=${encodeURIComponent(record.profileId)}`,
+                { state: { clientSourceTab: 'offers' } },
+              )}
           >
             {record.name}
           </Text>
@@ -536,7 +573,7 @@ const stats = useMemo(() => {
     },
   ];
 
-  return (
+return (
     <div style={{ display: 'grid', gap: 10, direction: 'rtl', maxWidth: 980, margin: '0 auto', width: '100%' }}>
       <Row gutter={[12, 12]}>
         <Col xs={24} sm={12} lg={8}>
@@ -546,18 +583,30 @@ const stats = useMemo(() => {
               value={stats.totalClients}
               prefix={<TeamOutlined />}
               valueStyle={{ fontSize: 20 }}
-              suffix={<Text style={{ color: '#16a34a', fontSize: 12 }}><ArrowUpOutlined /> 3%</Text>}
+              suffix={
+                offersStats ? (
+                  <Text style={{ color: getPercentageStyle(offersStats.percentage_change).color, fontSize: 12 }}>
+                    {getPercentageStyle(offersStats.percentage_change).icon} {formatPercentage(offersStats.percentage_change)}
+                  </Text>
+                ) : null
+              }
             />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={8}>
           <Card size="small" styles={{ body: { padding: 12 } }}>
-<Statistic
+            <Statistic
               title="العروض النشطة"
-              value={stats.activeClients}
+              value={offersStats?.active_offers ?? stats.activeClients}
               prefix={<UserOutlined />}
               valueStyle={{ fontSize: 20 }}
-              suffix={<Text style={{ color: '#16a34a', fontSize: 12 }}><ArrowUpOutlined /> 2%</Text>}
+              suffix={
+                offersStats ? (
+                  <Text style={{ color: getPercentageStyle(offersStats.active_percentage_change).color, fontSize: 12 }}>
+                    {getPercentageStyle(offersStats.active_percentage_change).icon} {formatPercentage(offersStats.active_percentage_change)}
+                  </Text>
+                ) : null
+              }
             />
           </Card>
         </Col>
@@ -565,10 +614,16 @@ const stats = useMemo(() => {
           <Card size="small" styles={{ body: { padding: 12 } }}>
             <Statistic
               title="إجمالي العروض"
-              value={stats.totalOffers}
+              value={offersStats?.total_offers ?? stats.totalOffers}
               prefix={<FileTextOutlined />}
               valueStyle={{ fontSize: 20 }}
-              suffix={<Text style={{ color: '#16a34a', fontSize: 12 }}><ArrowUpOutlined /> 4%</Text>}
+              suffix={
+                offersStats ? (
+                  <Text style={{ color: getPercentageStyle(offersStats.percentage_change).color, fontSize: 12 }}>
+                    {getPercentageStyle(offersStats.percentage_change).icon} {formatPercentage(offersStats.percentage_change)}
+                  </Text>
+                ) : null
+              }
             />
           </Card>
         </Col>

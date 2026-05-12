@@ -18,8 +18,8 @@ import {
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowUpOutlined, DeleteOutlined, FileTextOutlined, SolutionOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
-import { getClientRequests, createClientRequest, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, deleteClientRequest, type ClientRequest, type ClientProfile, type TeamUser, type UserPublic } from '../services/api';
+import { ArrowUpOutlined, ArrowDownOutlined, DeleteOutlined, FileTextOutlined, SolutionOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
+import { getClientRequests, createClientRequest, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, deleteClientRequest, getClientRequestsStats, type ClientRequest, type ClientProfile, type TeamUser, type UserPublic } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
@@ -159,18 +159,22 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
   const [assigningMap, setAssigningMap] = useState<Record<string, boolean>>({});
   const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolean>>({});
   const canAssignEmployee = currentUser?.role === 'owner' || currentUser?.role === 'manager';
+  // Real stats from API
+  const [requestsStats, setRequestsStats] = useState<{ total_requests: number; active_requests: number; new_requests: number; new_last_30_days: number; percentage_change: number; active_percentage_change: number; new_percentage_change: number } | null>(null);
 
-const loadClients = async () => {
+  const loadClients = async () => {
     try {
       // Load client requests + profiles with "request" type (for Requests tab)
-      const [rawRequestsData, requestProfilesData, teamUsersData] = await Promise.all([
+      // Also load stats from API for real percentage changes
+      const [rawRequestsData, requestProfilesData, teamUsersData, statsData] = await Promise.all([
         getClientRequests(),
         getClientProfilesByType('request'),  // Get profiles with request type
         getTeamUsers().catch(() => [] as TeamUser[]),
+        getClientRequestsStats().catch(() => null),
       ]);
       setTeamUsers(teamUsersData.filter((user) => user.status === 'active'));
-      
       setClients(mergeProfilesWithRequests(requestProfilesData, rawRequestsData, teamUsersData));
+      setRequestsStats(statsData);
     } catch {
       message.error('تعذر تحميل الطلبات.');
     }
@@ -216,27 +220,41 @@ const handleAddClient = async () => {
     try {
       const values = await form.validateFields();
       setAdding(true);
-      
-      // Create a persistent client profile with "request" type (independent from requests)
-      // This ensures the client persists even if all requests are deleted
-      await createClientProfile({
+
+      const profile = await createClientProfile({
         client_name: values.client_name,
         phone_number: values.phone_number || undefined,
         notes: '',
-        client_types: ['request'],  // Mark as request-type client
+        client_types: ['request'],
       });
-      
-      // Build raw text combining client info and optional AI analysis
-      let rawText = `عميل: ${values.client_name}`;
-      if (values.phone_number) rawText += ` - جوال: ${values.phone_number}`;
-      
-      // If user provides AI analysis request, add it
-      if (values.raw_text && values.raw_text.trim()) {
-        rawText += ` - ${values.raw_text.trim()}`;
+
+      const hasRequestText = !!(values.raw_text && String(values.raw_text).trim());
+
+      if (hasRequestText) {
+        let rawText = `عميل: ${values.client_name}`;
+        if (values.phone_number) rawText += ` - جوال: ${values.phone_number}`;
+        rawText += ` - ${String(values.raw_text).trim()}`;
+
+        try {
+          await createClientRequest({
+            raw_text: rawText,
+            profile_id: profile.id,
+            client_name: values.client_name,
+            phone_number: values.phone_number || undefined,
+          });
+        } catch (reqErr: any) {
+          try {
+            await deleteClientProfile(profile.id);
+          } catch {
+            /* ignore rollback errors */
+          }
+          throw reqErr;
+        }
+        message.success('تم إضافة الطلب بنجاح.');
+      } else {
+        message.success('تم إضافة العميل. يمكنك إضافة طلب لاحقاً من ملف العميل.');
       }
-      
-      await createClientRequest(rawText);
-      message.success('تم إضافة الطلب بنجاح.');
+
       form.resetFields();
       setAddModalOpen(false);
       await loadClients();
@@ -253,12 +271,29 @@ const handleAddClient = async () => {
     loadClients();
   }, []);
 
-  const stats = useMemo(() => {
+const stats = useMemo(() => {
     const totalClients = clients.length;
     const activeClients = clients.filter((c) => c.status === 'بحث نشط').length;
     const newRequests = clients.reduce((sum, c) => sum + c.requests.filter((r) => r.status === 'جديد').length, 0);
     return { totalClients, activeClients, newRequests };
   }, [clients]);
+
+  // Format percentage for display
+  const formatPercentage = (value: number | undefined | null) => {
+    if (value === undefined || value === null || isNaN(value)) return '0%';
+    const fixed = Math.abs(value).toFixed(1);
+    return `${fixed}%`;
+  };
+
+  // Get percentage arrow and color
+  const getPercentageStyle = (value: number | undefined | null) => {
+    if (value === undefined || value === null || isNaN(value)) {
+      return { icon: <ArrowUpOutlined />, color: '#16a34a' }; // Default green
+    }
+    return value >= 0
+      ? { icon: <ArrowUpOutlined />, color: '#16a34a' }
+      : { icon: <ArrowDownOutlined />, color: '#dc2626' };
+  };
 
   const columns: ColumnsType<ClientDataType> = [
     {
@@ -272,7 +307,11 @@ const handleAddClient = async () => {
           <Text
             strong
             style={{ fontSize: 12, cursor: 'pointer', color: '#1677ff' }}
-            onClick={() => navigate(`/app/clients/${encodeURIComponent(record.key)}`, { state: { clientSourceTab: 'requests' } })}
+            onClick={() =>
+              navigate(
+                `/app/clients/${encodeURIComponent(record.key)}?profile_id=${encodeURIComponent(record.profileId)}`,
+                { state: { clientSourceTab: 'requests' } },
+              )}
           >
             {record.name}
           </Text>
@@ -391,12 +430,18 @@ const handleAddClient = async () => {
       <Row gutter={[12, 12]}>
         <Col xs={24} sm={12} lg={8}>
           <Card size="small" styles={{ body: { padding: 12 } }}>
-            <Statistic
+<Statistic
               title="إجمالي العملاء"
               value={stats.totalClients}
               prefix={<TeamOutlined />}
               valueStyle={{ fontSize: 20 }}
-              suffix={<Text style={{ color: '#16a34a', fontSize: 12 }}><ArrowUpOutlined /> 3%</Text>}
+              suffix={
+                requestsStats ? (
+                  <Text style={{ color: getPercentageStyle(requestsStats.percentage_change).color, fontSize: 12 }}>
+                    {getPercentageStyle(requestsStats.percentage_change).icon} {formatPercentage(requestsStats.percentage_change)}
+                  </Text>
+                ) : null
+              }
             />
           </Card>
         </Col>
@@ -404,10 +449,16 @@ const handleAddClient = async () => {
           <Card size="small" styles={{ body: { padding: 12 } }}>
             <Statistic
               title="الطلبات النشطة"
-              value={stats.activeClients}
+              value={requestsStats?.active_requests ?? stats.activeClients}
               prefix={<SolutionOutlined />}
               valueStyle={{ fontSize: 20 }}
-              suffix={<Text style={{ color: '#16a34a', fontSize: 12 }}><ArrowUpOutlined /> 2%</Text>}
+              suffix={
+                requestsStats ? (
+                  <Text style={{ color: getPercentageStyle(requestsStats.active_percentage_change).color, fontSize: 12 }}>
+                    {getPercentageStyle(requestsStats.active_percentage_change).icon} {formatPercentage(requestsStats.active_percentage_change)}
+                  </Text>
+                ) : null
+              }
             />
           </Card>
         </Col>
@@ -415,10 +466,16 @@ const handleAddClient = async () => {
           <Card size="small" styles={{ body: { padding: 12 } }}>
             <Statistic
               title="طلبات جديدة"
-              value={stats.newRequests}
+              value={requestsStats?.new_requests ?? stats.newRequests}
               prefix={<FileTextOutlined />}
               valueStyle={{ fontSize: 20 }}
-              suffix={<Text style={{ color: '#16a34a', fontSize: 12 }}><ArrowUpOutlined /> 4%</Text>}
+              suffix={
+                requestsStats ? (
+                  <Text style={{ color: getPercentageStyle(requestsStats.new_percentage_change).color, fontSize: 12 }}>
+                    {getPercentageStyle(requestsStats.new_percentage_change).icon} {formatPercentage(requestsStats.new_percentage_change)}
+                  </Text>
+                ) : null
+              }
             />
           </Card>
         </Col>
@@ -480,7 +537,7 @@ const handleAddClient = async () => {
       {/* Add Client Modal */}
 <Modal
         open={addModalOpen}
-        title="إضافة طلب جديد"
+        title="إضافة عميل"
         onCancel={() => {
           setAddModalOpen(false);
           form.resetFields();
