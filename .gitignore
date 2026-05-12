@@ -24,3 +24,22 @@ npm-debug.log*
 .vscode/
 .idea/
 
+# Logs
+*.log
+backend/*.log
+
+# Backup / temporary python files
+*.bak
+*_backup.py
+*original.py
+*fixed.py
+*with_bug.py
+
+# Uploads
+backend/uploads/
+
+# Vercel
+.vercel/
+
+# Render / temp
+*.tmp

@@ -308,6 +308,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserPublic:
 # Configure CORS
 CORS_ORIGINS = {
     FRONTEND_BASE_URL,
+    "https://akare-five.vercel.app"
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
