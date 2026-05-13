@@ -7,10 +7,17 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 import os
 import re
+import logging
 import stripe
 import cloudinary
 import cloudinary.uploader
 from urllib.parse import urlparse
+import ssl
+import urllib.request
+from urllib.error import URLError, HTTPError
+
+import certifi
+from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from models import (
@@ -1285,7 +1292,8 @@ async def get_public_property(property_id: str, request: Request, response: Resp
     No authentication required, used for share links.
     """
     cookie_name = f"viewed_property_{re.sub(r'[^A-Za-z0-9_-]', '_', property_id)}"
-    has_recent_view = request.cookies.get(cookie_name) == "1"
+    skip_incr = (request.headers.get("x-akare-skip-view-count") or "").strip() == "1"
+    has_recent_view = skip_incr or request.cookies.get(cookie_name) == "1"
     prop = await get_property_by_id(property_id) if has_recent_view else await increment_property_view_count(property_id)
     if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
@@ -1300,6 +1308,63 @@ async def get_public_property(property_id: str, request: Request, response: Resp
             path="/",
         )
     return prop
+
+
+def _tiktok_resolve_host_allowed(host: str) -> bool:
+    h = (host or "").lower()
+    if not h:
+        return False
+    return h == "tiktok.com" or h.endswith(".tiktok.com")
+
+
+def _follow_redirects_get_final_url_sync(url: str) -> str:
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        },
+    )
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(req, timeout=25, context=ctx) as resp:
+        try:
+            resp.read(65536)
+        except Exception:
+            pass
+        return resp.geturl()
+
+
+@app.get("/public/resolve-video-url")
+async def resolve_public_video_url(
+    url: str = Query(..., min_length=12, max_length=2048, description="Share URL (e.g. vt.tiktok.com short link)"),
+):
+    """
+    Follow HTTP redirects server-side (avoids browser CORS) for TikTok share links
+    so the frontend can extract a numeric video id and embed via tiktok.com/embed/v2/...
+    """
+    raw = (url or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw.lstrip("/")
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="رابط غير صالح.")
+    host = (parsed.hostname or "").lower()
+    if not _tiktok_resolve_host_allowed(host):
+        raise HTTPException(status_code=400, detail="يُسمح فقط بروابط TikTok.")
+    try:
+        final_url = await run_in_threadpool(_follow_redirects_get_final_url_sync, raw)
+    except (URLError, HTTPError, TimeoutError, OSError) as e:
+        logging.exception("resolve_public_video_url: %s", e)
+        raise HTTPException(status_code=502, detail="تعذر استرجاع الرابط النهائي.")
+    except Exception as e:
+        logging.exception("resolve_public_video_url: %s", e)
+        raise HTTPException(status_code=502, detail="تعذر استرجاع الرابط النهائي.")
+    if not _tiktok_resolve_host_allowed(urlparse(final_url).hostname or ""):
+        raise HTTPException(status_code=400, detail="الرابط النهائي ليس على TikTok.")
+    return {"url": final_url}
 
 
 @app.post("/public/properties/{property_id}/inquiries", response_model=PropertyInquiryPublic)

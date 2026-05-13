@@ -12,6 +12,7 @@ import {
   Select,
   Popconfirm,
   Row,
+  Grid,
   Space,
   Statistic,
   Table,
@@ -22,6 +23,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowUpOutlined, ArrowDownOutlined, CloseOutlined, DeleteOutlined, FileTextOutlined, ShareAltOutlined, TeamOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
 import { getClientOffers, deleteClientOffer, createClientOffer, getProperties, resolveMediaUrl, getClientOfferNotes, createClientOfferNote, deleteClientOfferNote, updateClientOffer, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, getClientOffersStats, type ClientOffer, type ClientProfile, type Property, type ClientNote, type TeamUser, type UserPublic } from '../services/api';
+import { formatRelativeActivityAr, maxUtcIso, parseBackendUtcMs } from '../utils/relativeActivityAr';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -75,15 +77,6 @@ const mapOfferStatus = (backendStatus: string): ClientOfferStatus => {
   return 'اغلاق';
 };
 
-const formatActivity = (iso: string): string => {
-  const diffMs = Date.now() - Date.parse(iso);
-  const hours = Math.floor(diffMs / (1000 * 60 * 60));
-  if (hours < 1) return 'الآن';
-  if (hours < 24) return `منذ ${hours} ساعة`;
-  const days = Math.floor(hours / 24);
-  return `منذ ${days} يوم`;
-};
-
 const normalizeIdentityPart = (value?: string | null): string => (value || '').trim().toLowerCase();
 
 const digitsOnly = (v: string | null | undefined) => (v ?? '').replace(/\D/g, '');
@@ -128,22 +121,27 @@ const mergeProfilesWithOffers = (
   const result: ClientOfferDataType[] = profiles.map((profile) => {
     const offers = rows
       .filter((row) => sameClientIdentity(profile, row))
-      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      .sort((a, b) => parseBackendUtcMs(b.created_at) - parseBackendUtcMs(a.created_at));
     const latest = offers[0];
 
-const items: ClientOfferItem[] = offers.map((o) => ({
+    const items: ClientOfferItem[] = offers.map((o) => ({
       id: o.id,
       propertyId: o.property_id,
       // Handle empty property_id (client-only registration without an offer)
       property: o.property_id ? propertyMap.get(o.property_id) : undefined,
       status: mapOfferStatus(o.status),
-      createdAt: formatActivity(o.created_at),
+      createdAt: formatRelativeActivityAr(o.created_at),
     }));
 
-const hasNew = items.some((i) => i.status === 'جديد');
+    const hasNew = items.some((i) => i.status === 'جديد');
     const hasWorking = items.some((i) => i.status === ' جاري ');
     const status: ClientOfferStatus = hasWorking ? ' جاري ' : hasNew ? 'جديد' : 'اغلاق';
-    const lastActivityAt = latest?.created_at || profile.updated_at || profile.created_at;
+    const lastActivityAt =
+      maxUtcIso(
+        profile.updated_at,
+        profile.created_at,
+        ...offers.map((o) => o.created_at),
+      ) || profile.created_at;
     const assignedUser = teamUsers.find((user) => user.id === profile.assigned_user_id);
     const assignedUserName = assignedUser ? getUserDisplayName(assignedUser) : profile.assigned_user_name || 'غير محدد';
 
@@ -153,7 +151,7 @@ const hasNew = items.some((i) => i.status === 'جديد');
       clientTypes: profile.client_types || [],
       name: profile.client_name || latest?.client_name || 'غير محدد',
       phone: profile.phone_number || latest?.phone_number || 'غير متوفر',
-      lastActivity: formatActivity(lastActivityAt),
+      lastActivity: formatRelativeActivityAr(lastActivityAt),
       status,
       ownerEmployee: {
         id: profile.assigned_user_id,
@@ -168,6 +166,7 @@ const hasNew = items.some((i) => i.status === 'جديد');
 };
 
 const ClientOffersPanel: React.FC<Props> = ({ loading = false, currentUser }) => {
+  const screens = Grid.useBreakpoint();
   const navigate = useNavigate();
   const [clients, setClients] = useState<ClientOfferDataType[]>([]);
   const [allProperties, setAllProperties] = useState<Property[]>([]);
@@ -474,14 +473,15 @@ const stats = useMemo(() => {
       title: 'آخر نشاط',
       dataIndex: 'lastActivity',
       key: 'lastActivity',
-      width: 110,
-      responsive: ['lg'],
+      width: 120,
+      responsive: ['md'],
       render: (value: string) => <Text style={{ fontSize: 12 }}>{value}</Text>,
     },
     {
       title: 'عدد العروض',
       key: 'offersCount',
       width: 110,
+      responsive: ['md'],
       render: (_: unknown, record) => <Text style={{ fontSize: 12 }}>{record.offers.length}</Text>,
     },
 {
@@ -574,7 +574,19 @@ const stats = useMemo(() => {
   ];
 
 return (
-    <div style={{ display: 'grid', gap: 10, direction: 'rtl', maxWidth: 980, margin: '0 auto', width: '100%' }}>
+    <div
+      style={{
+        display: 'grid',
+        gap: 10,
+        direction: 'rtl',
+        maxWidth: 980,
+        margin: '0 auto',
+        width: '100%',
+        minWidth: 0,
+        boxSizing: 'border-box',
+        paddingInline: screens.xs && !screens.sm ? 8 : 0,
+      }}
+    >
       <Row gutter={[12, 12]}>
         <Col xs={24} sm={12} lg={8}>
           <Card size="small" styles={{ body: { padding: 12 } }}>
@@ -632,7 +644,10 @@ return (
 <Card 
         title="العروض المقدمة من العملاء" 
         size="small" 
-        styles={{ body: { padding: 10 } }}
+        styles={{
+          header: { flexWrap: 'wrap', rowGap: 8, alignItems: 'center' },
+          body: { padding: 10, overflowX: 'auto' },
+        }}
         extra={
           <Button
             type="primary"
@@ -649,10 +664,12 @@ return (
           dataSource={clients}
           loading={loading}
           size="small"
-          scroll={{ x: 760 }}
+          scroll={{ x: 'max-content' }}
           pagination={{ pageSize: 6, size: 'small' }}
-expandable={{
-            expandedRowRender: (record) => (
+          expandable={{
+            expandedRowRender: (record) => {
+              const stackSm = !screens.sm;
+              return (
               <div style={{ display: 'grid', gap: 8, padding: '8px 0' }}>
                 {record.offers.map((offer) => (
                   <Card
@@ -660,11 +677,21 @@ expandable={{
                     size="small"
                     style={{ borderRadius: 10 }}
                   >
-<div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: stackSm ? 'column' : 'row',
+                        gap: 16,
+                        alignItems: stackSm ? 'stretch' : 'center',
+                      }}
+                    >
                       <div
                         style={{
-                          width: 180,
-                          height: 135,
+                          width: stackSm ? '100%' : 180,
+                          maxWidth: stackSm ? '100%' : 180,
+                          height: stackSm ? undefined : 135,
+                          aspectRatio: stackSm ? '4 / 3' : undefined,
+                          minHeight: stackSm ? 120 : 135,
                           borderRadius: 12,
                           overflow: 'hidden',
                           background: '#f1f5f9',
@@ -690,20 +717,29 @@ expandable={{
                           />
                         ) : (
                           <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>
-<FileTextOutlined style={{ fontSize: 48 }} />
+                            <FileTextOutlined style={{ fontSize: 48 }} />
                           </div>
                         )}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                          <Text strong>
-                            {offer.property 
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: 4,
+                            flexWrap: 'wrap',
+                            gap: 8,
+                          }}
+                        >
+                          <Text strong style={{ flex: '1 1 auto', minWidth: 0 }}>
+                            {offer.property
                               ? `${offer.property.property_type} - ${offer.property.neighborhood}`
                               : 'بدون عرض بعد'}
                           </Text>
                           <Select
                             value={offer.status}
-                            style={{ width: 100 }}
+                            style={{ width: stackSm ? '100%' : 100, maxWidth: stackSm ? 200 : undefined }}
                             size="small"
                             onChange={(val) => handleStatusChange(offer.id, val as ClientOfferStatus)}
                             options={[
@@ -715,12 +751,12 @@ expandable={{
                           />
                         </div>
                         <Text type="secondary" style={{ fontSize: 11 }}>
-                          {offer.property 
+                          {offer.property
                             ? `${offer.property.city} | ${offer.property.price?.toLocaleString('ar-SA')} ر.س`
                             : 'لم يتم ربط عقار بعد'}
                         </Text>
                         <div style={{ marginTop: 4 }}>
-                          <Space size="small">
+                          <Space size="small" wrap>
                             <Button
                               size="small"
                               type="text"
@@ -753,7 +789,8 @@ expandable={{
                   </Card>
                 ))}
               </div>
-            ),
+              );
+            },
             rowExpandable: (record) => record.offers.length > 0,
           }}
         />
@@ -777,6 +814,8 @@ expandable={{
             إضافة
           </Button>,
         ]}
+        width={screens.xs && !screens.sm ? 'calc(100vw - 16px)' : 520}
+        styles={{ body: { maxHeight: 'min(70vh, 560px)', overflowY: 'auto' } }}
         style={{ direction: 'rtl' }}
       >
         <Form form={createForm} layout="vertical" dir="rtl">
@@ -833,7 +872,8 @@ expandable={{
             إغلاق
           </Button>,
         ]}
-        width={500}
+        width={screens.xs && !screens.sm ? 'calc(100vw - 16px)' : 500}
+        styles={{ body: { maxHeight: 'min(75vh, 620px)', overflowY: 'auto' } }}
         style={{ direction: 'rtl' }}
       >
         {/* Add new note form */}

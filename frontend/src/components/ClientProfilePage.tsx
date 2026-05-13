@@ -70,6 +70,7 @@ import {
   type ClientNote,
   type ClientProfile,
 } from '../services/api';
+import { parseBackendUtcMs } from '../utils/relativeActivityAr';
 
 // Helper to map backend offer status to frontend status
 const mapOfferStatus = (backendStatus: string): string => {
@@ -316,7 +317,7 @@ const load = useCallback(async () => {
       const all = await getClientRequests();
       const filtered = all
         .filter((r) => (r.client_name || 'غير محدد').trim() === name.trim() && (r.phone_number || '').trim() === phone.trim())
-        .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+        .sort((a, b) => parseBackendUtcMs(b.updated_at) - parseBackendUtcMs(a.updated_at));
       setRequests(filtered);
 
 // Load client offers with properties

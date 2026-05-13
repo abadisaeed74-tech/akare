@@ -9,6 +9,7 @@ import {
   Modal,
   Popconfirm,
   Row,
+  Grid,
   Select,
   Space,
   Statistic,
@@ -20,6 +21,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowUpOutlined, ArrowDownOutlined, DeleteOutlined, FileTextOutlined, SolutionOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { getClientRequests, createClientRequest, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, deleteClientRequest, getClientRequestsStats, type ClientRequest, type ClientProfile, type TeamUser, type UserPublic } from '../services/api';
+import { formatRelativeActivityAr, maxUtcIso, parseBackendUtcMs } from '../utils/relativeActivityAr';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import duration from 'dayjs/plugin/duration';
@@ -75,15 +77,6 @@ const statusColor = (status: ClientStatus | RequestStatus): string => {
   return 'green';
 };
 
-const formatActivity = (iso: string): string => {
-  const diffMs = Date.now() - Date.parse(iso);
-  const hours = Math.floor(diffMs / (1000 * 60 * 60));
-  if (hours < 1) return 'الآن';
-  if (hours < 24) return `منذ ${hours} ساعة`;
-  const days = Math.floor(hours / 24);
-  return `منذ ${days} يوم`;
-};
-
 const normalizeIdentityPart = (value?: string | null): string => (value || '').trim().toLowerCase();
 
 const profileKey = (profile: ClientProfile): string => (
@@ -111,21 +104,26 @@ const mergeProfilesWithRequests = (
   const result: ClientDataType[] = profiles.map((profile) => {
     const requests = rows
       .filter((row) => sameClientIdentity(profile, row))
-      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+      .sort((a, b) => parseBackendUtcMs(b.updated_at) - parseBackendUtcMs(a.updated_at));
 
     const latest = requests[0];
     const items: ClientRequestItem[] = requests.map((r) => ({
       id: r.id,
       title: `${r.property_type || 'عقار'} - ${r.city || 'غير محدد'}`,
       status: mapStatus(r.status),
-      createdAt: formatActivity(r.created_at),
+      createdAt: formatRelativeActivityAr(r.created_at),
       strategy: r.action_plan || 'غير محدد',
     }));
 
     const hasSearching = items.some((i) => i.status === 'بحث نشط');
     const hasNew = items.some((i) => i.status === 'جديد');
     const status: ClientStatus = hasSearching ? 'بحث نشط' : hasNew ? 'جديد' : 'تم الإغلاق';
-    const lastActivityAt = latest?.updated_at || profile.updated_at || profile.created_at;
+    const lastActivityAt =
+      maxUtcIso(
+        profile.updated_at,
+        profile.created_at,
+        ...requests.flatMap((r) => [r.updated_at, r.created_at]),
+      ) || profile.created_at;
     const assignedUser = teamUsers.find((user) => user.id === profile.assigned_user_id);
     const assignedUserName = assignedUser ? getUserDisplayName(assignedUser) : profile.assigned_user_name || 'غير محدد';
 
@@ -135,7 +133,7 @@ const mergeProfilesWithRequests = (
       clientTypes: profile.client_types || [],
       name: profile.client_name || latest?.client_name || 'غير محدد',
       phone: profile.phone_number || latest?.phone_number || 'غير متوفر',
-      lastActivity: formatActivity(lastActivityAt),
+      lastActivity: formatRelativeActivityAr(lastActivityAt),
       status,
       ownerEmployee: {
         id: profile.assigned_user_id,
@@ -150,6 +148,7 @@ const mergeProfilesWithRequests = (
 };
 
 const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) => {
+  const screens = Grid.useBreakpoint();
   const navigate = useNavigate();
   const [form] = Form.useForm();
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -330,14 +329,15 @@ const stats = useMemo(() => {
       title: 'آخر نشاط',
       dataIndex: 'lastActivity',
       key: 'lastActivity',
-      width: 110,
-      responsive: ['lg'],
+      width: 120,
+      responsive: ['md'],
       render: (value: string) => <Text style={{ fontSize: 12 }}>{value}</Text>,
     },
     {
       title: 'عدد الطلبات',
       key: 'requestsCount',
       width: 90,
+      responsive: ['md'],
       render: (_: unknown, record) => <Text style={{ fontSize: 12 }}>{record.requests.length}</Text>,
     },
     {
@@ -426,7 +426,19 @@ const stats = useMemo(() => {
   ];
 
   return (
-    <div style={{ display: 'grid', gap: 10, direction: 'rtl', maxWidth: 980, margin: '0 auto', width: '100%' }}>
+    <div
+      style={{
+        display: 'grid',
+        gap: 10,
+        direction: 'rtl',
+        maxWidth: 980,
+        margin: '0 auto',
+        width: '100%',
+        minWidth: 0,
+        boxSizing: 'border-box',
+        paddingInline: screens.xs && !screens.sm ? 8 : 0,
+      }}
+    >
       <Row gutter={[12, 12]}>
         <Col xs={24} sm={12} lg={8}>
           <Card size="small" styles={{ body: { padding: 12 } }}>
@@ -484,7 +496,10 @@ const stats = useMemo(() => {
 <Card 
         title=" طلبات العملاء" 
         size="small" 
-        styles={{ body: { padding: 10 } }}
+        styles={{
+          header: { flexWrap: 'wrap', rowGap: 8, alignItems: 'center' },
+          body: { padding: 10, overflowX: 'auto' },
+        }}
         extra={
 <Button 
             type="primary" 
@@ -501,7 +516,7 @@ const stats = useMemo(() => {
           dataSource={clients}
           loading={loading}
           size="small"
-          scroll={{ x: 760 }}
+          scroll={{ x: 'max-content' }}
           pagination={{ pageSize: 6, size: 'small' }}
           expandable={{
             expandedRowRender: (record) => (
@@ -553,6 +568,8 @@ const stats = useMemo(() => {
             إضافة
           </Button>,
         ]}
+        width={screens.xs && !screens.sm ? 'calc(100vw - 16px)' : 520}
+        styles={{ body: { maxHeight: 'min(70vh, 560px)', overflowY: 'auto' } }}
         style={{ direction: 'rtl' }}
       >
 <Form form={form} layout="vertical" dir="rtl">

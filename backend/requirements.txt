@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+certifi
 pydantic
 motor
 python-dotenv

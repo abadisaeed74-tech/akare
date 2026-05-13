@@ -547,7 +547,7 @@ onClick={() => handleSectionChange('properties')}
                         </div>
                     </div>
                 </Header>
-                <Content style={{ margin: '0 4px 4px' }}>
+                <Content style={{ margin: '0 4px 4px', minWidth: 0 }}>
                     {activeSection === 'overview' ? (
                         <div style={{ display: 'grid', gap: 16 }}>
                             <Row gutter={[12, 12]}>

@@ -504,9 +504,59 @@ export const aiSearchProperties = async (query: string): Promise<Property[]> => 
   return response.data;
 };
 
+const PUBLIC_PROPERTY_VIEW_KEY = 'akare_public_pv_';
+const PUBLIC_PROPERTY_VIEW_TTL_MS = 24 * 60 * 60 * 1000;
+const publicPropertyInflight = new Map<string, Promise<Property>>();
+
 export const getPublicProperty = async (id: string): Promise<Property> => {
-  const response = await apiClient.get(`/public/properties/${id}`, { withCredentials: true });
-  return response.data;
+  const existing = publicPropertyInflight.get(id);
+  if (existing) return existing;
+
+  let skipViewCount = false;
+  try {
+    const raw = localStorage.getItem(PUBLIC_PROPERTY_VIEW_KEY + id);
+    if (raw) {
+      const t = parseInt(raw, 10);
+      if (!Number.isNaN(t) && Date.now() - t < PUBLIC_PROPERTY_VIEW_TTL_MS) {
+        skipViewCount = true;
+      }
+    }
+  } catch {
+    /* private mode */
+  }
+
+  const promise = (async () => {
+    const headers: Record<string, string> = {};
+    if (skipViewCount) headers['X-Akare-Skip-View-Count'] = '1';
+    const response = await apiClient.get(`/public/properties/${id}`, {
+      withCredentials: true,
+      headers,
+    });
+    if (!skipViewCount) {
+      try {
+        localStorage.setItem(PUBLIC_PROPERTY_VIEW_KEY + id, String(Date.now()));
+      } catch {
+        /* ignore */
+      }
+    }
+    return response.data as Property;
+  })();
+
+  publicPropertyInflight.set(id, promise);
+  try {
+    return await promise;
+  } finally {
+    publicPropertyInflight.delete(id);
+  }
+};
+
+export const resolvePublicVideoUrl = async (shareUrl: string): Promise<string> => {
+  const response = await apiClient.get<{ url: string }>('/public/resolve-video-url', {
+    params: { url: shareUrl },
+  });
+  const u = (response.data?.url || '').trim();
+  if (!u) throw new Error('empty resolved url');
+  return u;
 };
 
 export const createPublicPropertyInquiry = async (
