@@ -15,9 +15,9 @@ const PLAN_CATALOG: Record<
   string,
   { key: string; name: string; price_monthly_sar?: number | null }
 > = {
-  starter: { key: 'starter', name: 'خطة المكاتب الصغيرة', price_monthly_sar: 99 },
-  business: { key: 'business', name: 'خطة المكاتب المتوسطة', price_monthly_sar: 249 },
-  enterprise: { key: 'enterprise', name: 'خطة الشركات', price_monthly_sar: 799 },
+  starter: { key: 'starter', name: 'مبتدئ', price_monthly_sar: 99 },
+  business: { key: 'business', name: 'احترافي', price_monthly_sar: 199 },
+  enterprise: { key: 'enterprise', name: 'مؤسسات', price_monthly_sar: 599 },
 };
 
 const StripeCheckoutPage: React.FC = () => {
