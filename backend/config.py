@@ -1,6 +1,12 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=ENV_PATH)
+
 UPLOAD_DIR = os.path.abspath(os.path.expanduser(os.getenv("UPLOAD_DIR", "").strip() or os.path.join(BASE_DIR, "uploads")))
 
 SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME_IN_PRODUCTION")
@@ -45,3 +51,25 @@ CORS_ORIGINS = {
     "http://127.0.0.1:3000",
 }
 CORS_ORIGINS.update(origin.strip().rstrip("/") for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip())
+
+# Support Vercel preview and production domains without redeploying code each time.
+CORS_ORIGIN_REGEX = os.getenv(
+    "CORS_ORIGIN_REGEX",
+    r"^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$",
+).strip() or None
+
+
+def ensure_stripe_env_or_raise() -> None:
+    required_keys = {
+        "STRIPE_SECRET_KEY": STRIPE_SECRET_KEY,
+        "STRIPE_PRICE_STARTER_MONTHLY": STRIPE_PRICE_IDS.get("starter", ""),
+        "STRIPE_PRICE_BUSINESS_MONTHLY": STRIPE_PRICE_IDS.get("business", ""),
+        "STRIPE_PRICE_ENTERPRISE_MONTHLY": STRIPE_PRICE_IDS.get("enterprise", ""),
+    }
+    missing = [name for name, value in required_keys.items() if not str(value or "").strip()]
+    if missing:
+        raise RuntimeError(
+            "Stripe environment is not fully configured. Missing keys: "
+            + ", ".join(missing)
+            + f". Expected .env at: {ENV_PATH}"
+        )

@@ -31,6 +31,8 @@ from models import (
 )
 from services.notification_service import create_owner_team_notification
 
+stripe.api_key = STRIPE_SECRET_KEY or None
+
 # Keep keys aligned with existing API contracts.
 PLANS: Dict[str, Dict[str, object]] = {
     "starter": {
@@ -172,28 +174,34 @@ async def create_checkout_session_service(
     success_url = data.success_url or f"{FRONTEND_BASE_URL}/billing/checkout?status=success"
     cancel_url = data.cancel_url or f"{FRONTEND_BASE_URL}/billing/checkout?status=cancel"
 
-    stripe_customer_id = company.get("stripe_customer_id")
-    if stripe_customer_id:
-        customer_id = stripe_customer_id
-    else:
-        customer = stripe.Customer.create(
-            email=current_user.email,
-            metadata={"owner_user_id": current_user.id},
-        )
-        customer_id = customer["id"]
-        await set_company_stripe_customer_id(current_user.id, customer_id)
+    try:
+        stripe_customer_id = company.get("stripe_customer_id")
+        if stripe_customer_id:
+            customer_id = stripe_customer_id
+        else:
+            customer = stripe.Customer.create(
+                email=current_user.email,
+                metadata={"owner_user_id": current_user.id},
+            )
+            customer_id = customer["id"]
+            await set_company_stripe_customer_id(current_user.id, customer_id)
 
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        customer=customer_id,
-        line_items=[{"price": price_id, "quantity": 1}],
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={"owner_user_id": current_user.id, "plan_key": plan_key},
-        subscription_data={
-            "metadata": {"owner_user_id": current_user.id, "plan_key": plan_key}
-        },
-    )
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{"price": price_id, "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={"owner_user_id": current_user.id, "plan_key": plan_key},
+            subscription_data={
+                "metadata": {"owner_user_id": current_user.id, "plan_key": plan_key}
+            },
+        )
+    except stripe.error.StripeError as exc:
+        detail = getattr(exc, "user_message", None) or str(exc) or "Stripe request failed."
+        raise HTTPException(status_code=502, detail=f"تعذر إنشاء جلسة الدفع عبر Stripe: {detail}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="حدث خطأ غير متوقع أثناء إنشاء جلسة الدفع.")
     return CheckoutSessionResponse(url=session["url"], session_id=session["id"])
 
 

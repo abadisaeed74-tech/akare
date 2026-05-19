@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from config import CORS_ORIGINS, UPLOAD_DIR
+from config import CORS_ORIGIN_REGEX, CORS_ORIGINS, UPLOAD_DIR, ensure_stripe_env_or_raise
 from routers import (
     admin,
     appointments,
@@ -23,6 +23,7 @@ from routers import (
 )
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+ensure_stripe_env_or_raise()
 
 app = FastAPI(
     title="Akare Real Estate AI API",
@@ -33,6 +34,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(CORS_ORIGINS),
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
