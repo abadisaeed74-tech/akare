@@ -16,18 +16,26 @@ import {
     SolutionOutlined,
     UserOutlined,
     ScheduleOutlined,
+    RocketOutlined,
 } from '@ant-design/icons';
 import {
     Property,
     getProperties,
     aiSearchProperties,
     UserPublic,
+    NotificationItem,
     getCurrentUser,
     getPublicCompany,
     setAuthToken,
     resolveMediaUrl,
     getDashboardOverview,
     getClientProfiles,
+    getNotifications,
+    getUnreadNotificationsCount,
+    markNotificationRead,
+    markAllNotificationsRead,
+    deleteNotification,
+    API_BASE_URL,
     type DashboardOverview,
     type ClientProfile,
 } from './services/api';
@@ -40,17 +48,19 @@ import PlatformLogo from './components/PlatformLogo';
 import AppointmentsPage from './components/AppointmentsPage';
 import ClientRequestsPanel from './components/ClientRequestsPanel';
 import ClientOffersPanel from './components/ClientOffersPanel';
+import MarketingPage from './components/MarketingPage';
+import NotificationBell from './components/NotificationBell';
 
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
 const PLATFORM_OWNER_EMAIL = 'abadi.saeed@bynh.sa';
-type AppSection = 'overview' | 'properties' | 'clients' | 'appointments';
+type AppSection = 'overview' | 'properties' | 'clients' | 'appointments' | 'marketing';
 type ClientsTab = 'requests' | 'offers';
 
 const getSectionFromSearch = (search: string): AppSection => {
     const section = new URLSearchParams(search).get('section');
-    if (section === 'properties' || section === 'clients' || section === 'appointments') {
+    if (section === 'properties' || section === 'clients' || section === 'appointments' || section === 'marketing') {
         return section;
     }
     return 'overview';
@@ -76,6 +86,9 @@ const [activeSection, setActiveSection] = useState<AppSection>(() => getSectionF
     const [isMobile, setIsMobile] = useState<boolean>(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
 const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
     const [recentClients, setRecentClients] = useState<ClientProfile[]>([]);
+    const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+    const [notificationsLoading, setNotificationsLoading] = useState<boolean>(false);
+    const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
     const navigate = useNavigate();
     const location = useLocation();
 
@@ -119,6 +132,23 @@ const fetchOverview = useCallback(async () => {
         }
     }, []);
 
+    const fetchNotifications = useCallback(async () => {
+        setNotificationsLoading(true);
+        try {
+            const [listResult, unreadCount] = await Promise.all([
+                getNotifications({ page: 1, page_size: 20 }),
+                getUnreadNotificationsCount(),
+            ]);
+            setNotifications(listResult.items || []);
+            setUnreadNotificationsCount(unreadCount || 0);
+        } catch {
+            setNotifications([]);
+            setUnreadNotificationsCount(0);
+        } finally {
+            setNotificationsLoading(false);
+        }
+    }, []);
+
 
     useEffect(() => {
         const initAuth = async () => {
@@ -149,6 +179,11 @@ const fetchOverview = useCallback(async () => {
 useEffect(() => {
         fetchAndSetProperties();
     }, [fetchAndSetProperties]);
+
+    useEffect(() => {
+        if (!currentUser?.id) return;
+        void fetchNotifications();
+    }, [currentUser?.id, fetchNotifications]);
 
     useEffect(() => {
         fetchOverview();
@@ -188,7 +223,7 @@ useEffect(() => {
 const state = location.state as { section?: string; tab?: string } | null;
         if (state?.section) {
             const section = state.section as AppSection;
-            if (['overview', 'properties', 'clients', 'appointments'].includes(section)) {
+            if (['overview', 'properties', 'clients', 'appointments', 'marketing'].includes(section)) {
                 const tab = state.tab === 'offers' ? 'offers' : 'requests';
                 setActiveSection(section);
                 if (section === 'clients') {
@@ -239,11 +274,43 @@ const handleLogout = () => {
         navigate('/auth', { replace: true });
     };
 
+    useEffect(() => {
+        if (!currentUser?.id) return;
+        const token = localStorage.getItem('access_token');
+        if (!token) return;
+        const source = new EventSource(`${API_BASE_URL}/notifications/stream?token=${encodeURIComponent(token)}`);
+        source.addEventListener('notification_created', (evt) => {
+            try {
+                const payload = JSON.parse((evt as MessageEvent).data || '{}');
+                const incoming = payload?.notification as NotificationItem | undefined;
+                if (incoming?.title) {
+                    message.info(`${incoming.title}: ${incoming.message}`);
+                }
+            } catch {
+                // no-op
+            }
+            void fetchNotifications();
+        });
+        source.addEventListener('notification_read', () => {
+            void fetchNotifications();
+        });
+        source.addEventListener('notifications_read_all', () => {
+            void fetchNotifications();
+        });
+        source.onerror = () => {};
+        return () => {
+            source.close();
+        };
+    }, [currentUser?.id, fetchNotifications]);
+
 // Clear selected property when switching sections
     const handleSectionChange = (section: AppSection, tab?: ClientsTab) => {
         setActiveSection(section);
         if (section === 'clients' && tab) {
             setClientsTab(tab);
+        }
+        if (isMobile) {
+            setSiderCollapsed(true);
         }
         // Clear selected property when leaving properties section
         if (section !== 'properties') {
@@ -296,6 +363,9 @@ const handleLogout = () => {
 
 const totalProperties = overview?.total_properties ?? properties.length;
     const totalViewsLabel = overview ? overview.total_views.toLocaleString('ar-SA') : 'غير متوفرة';
+    const totalRequestsAndOffers = overview
+        ? ((overview.total_client_requests ?? 0) + (overview.total_client_offers ?? 0))
+        : 0;
     const latestProperties = properties.slice(0, 4);
 
     return (
@@ -399,6 +469,19 @@ onClick={() => handleSectionChange('properties')}
                         onClick={() => handleSectionChange('appointments')}>
                         المواعيد والمتابعة
                     </Button>
+                    <Button
+                        type="text"
+                        icon={<RocketOutlined />}
+                        style={{
+                            justifyContent: 'flex-start',
+                            color: palette.text,
+                            borderRadius: 10,
+                            background: activeSection === 'marketing' ? '#edf5e9' : 'transparent',
+                        }}
+                        onClick={() => handleSectionChange('marketing')}
+                    >
+                        التسويق
+                    </Button>
 {activeSection === 'clients' && (
                         <div style={{ padding: '0px 8px', marginTop: 8 }}>
 <Tabs
@@ -454,8 +537,8 @@ onClick={() => handleSectionChange('properties')}
                     style={{
                         background: palette.surface,
                         padding: '0 18px',
-                        height: 82,
-                        lineHeight: '82px',
+                        height: isMobile ? 'auto' : 82,
+                        lineHeight: isMobile ? 'normal' : '82px',
                         border: palette.glassBorder,
                         borderRadius: 18,
                         marginBottom: 14,
@@ -512,6 +595,8 @@ onClick={() => handleSectionChange('properties')}
                                                 : 'عروض العملاء'
                                             : activeSection === 'appointments'
                                             ? 'المواعيد والمتابعة'
+                                            : activeSection === 'marketing'
+                                            ? 'التسويق'
                                             : 'قائمة العقارات'}
                                 </Title>
                                 <Text style={{ color: palette.textMuted, fontSize: 12 }}>
@@ -527,10 +612,11 @@ onClick={() => handleSectionChange('properties')}
                                 flex: isMobile ? '1 1 100%' : '1 1 560px',
                                 minWidth: isMobile ? 0 : 260,
                                 marginInlineStart: 'auto',
+                                width: isMobile ? '100%' : undefined,
                             }}
                         >
                             {activeSection === 'properties' ? (
-                                <div style={{ flex: 1, minWidth: 220, maxWidth: 620 }}>
+                                <div style={{ flex: 1, minWidth: isMobile ? 0 : 220, maxWidth: 620 }}>
                                     <Search
                                         placeholder="ابحث باسم العقار، المدينة أو الحي..."
                                         onSearch={handleSearch}
@@ -540,10 +626,37 @@ onClick={() => handleSectionChange('properties')}
                                     />
                                 </div>
                             ) : (
-                                <Text style={{ whiteSpace: 'nowrap', color: palette.textMuted }}>
+                                <Text style={{ whiteSpace: isMobile ? 'normal' : 'nowrap', color: palette.textMuted }}>
                                     ملخص أداء المكتب العقاري
                                 </Text>
                             )}
+                            <div style={{ flexShrink: 0 }}>
+                                <NotificationBell
+                                    items={notifications}
+                                    unreadCount={unreadNotificationsCount}
+                                    loading={notificationsLoading}
+                                    onMarkAsRead={async (id) => {
+                                        await markNotificationRead(id);
+                                        setNotifications((prev) =>
+                                            prev.map((item) => (item.id === id ? { ...item, read: true, read_at: new Date().toISOString() } : item)),
+                                        );
+                                        setUnreadNotificationsCount((prev) => Math.max(0, prev - 1));
+                                    }}
+                                    onDelete={async (id) => {
+                                        await deleteNotification(id);
+                                        setNotifications((prev) => prev.filter((item) => item.id !== id));
+                                        void fetchNotifications();
+                                    }}
+                                    onMarkAllRead={async () => {
+                                        await markAllNotificationsRead();
+                                        setNotifications((prev) =>
+                                            prev.map((item) => ({ ...item, read: true, read_at: item.read_at || new Date().toISOString() })),
+                                        );
+                                        setUnreadNotificationsCount(0);
+                                    }}
+                                    onOpenAll={() => navigate('/notifications')}
+                                />
+                            </div>
                         </div>
                     </div>
                 </Header>
@@ -630,7 +743,7 @@ onClick={() => handleSectionChange('properties')}
                                             </div>
                                         </div>
                                         <Title level={2} style={{ margin: '12px 0 2px', color: palette.text }}>
-                                            {overview?.total_inquiries?.toLocaleString('ar-SA') || '0'}
+                                            {totalRequestsAndOffers.toLocaleString('ar-SA')}
                                         </Title>
 <Text strong style={{ color: palette.textMuted }}>الطلبات والعروض</Text>
                                     </Card>
@@ -768,6 +881,12 @@ onClick={() => handleSectionChange('properties')}
                         )
                     ) : activeSection === 'appointments' ? (
                         <AppointmentsPage />
+                    ) : activeSection === 'marketing' ? (
+                        <MarketingPage
+                            onOpenLanding={(propertyId) => {
+                                window.open(`/ad/${propertyId}`, '_blank', 'noopener,noreferrer');
+                            }}
+                        />
                     ) : (
                         <>
                             {showPropertyForm && (

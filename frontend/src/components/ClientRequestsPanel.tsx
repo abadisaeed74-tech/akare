@@ -20,7 +20,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowUpOutlined, ArrowDownOutlined, DeleteOutlined, FileTextOutlined, SolutionOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
-import { getClientRequests, createClientRequest, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, deleteClientRequest, getClientRequestsStats, type ClientRequest, type ClientProfile, type TeamUser, type UserPublic } from '../services/api';
+import { getClientRequests, createClientRequest, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientRequest, updateClientProfile, deleteClientProfile, deleteClientRequest, getClientRequestsStats, type ClientRequest, type ClientProfile, type TeamUser, type UserPublic } from '../services/api';
 import { formatRelativeActivityAr, maxUtcIso, parseBackendUtcMs } from '../utils/relativeActivityAr';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -42,6 +42,8 @@ interface ClientRequestItem {
   status: RequestStatus;
   createdAt: string;
   strategy: string;
+  assignedUserId?: string | null;
+  assignedUserName?: string | null;
 }
 
 interface ClientDataType {
@@ -52,11 +54,6 @@ interface ClientDataType {
   phone: string;
   lastActivity: string;
   status: ClientStatus;
-  ownerEmployee: {
-    id?: string | null;
-    name: string;
-    avatarText: string;
-  };
   requests: ClientRequestItem[];
 }
 
@@ -84,7 +81,7 @@ const profileKey = (profile: ClientProfile): string => (
 );
 
 const getUserDisplayName = (user: TeamUser): string => (
-  user.display_name?.trim() || (user.role === 'owner' ? 'مالك الحساب' : user.role === 'manager' ? 'مدير بدون اسم' : 'موظف بدون اسم')
+  user.display_name?.trim() || user.email || (user.role === 'owner' ? 'مالك الحساب' : user.role === 'manager' ? 'مدير' : 'موظف')
 );
 
 const sameClientIdentity = (profile: ClientProfile, row: ClientRequest): boolean => {
@@ -99,7 +96,6 @@ const sameClientIdentity = (profile: ClientProfile, row: ClientRequest): boolean
 const mergeProfilesWithRequests = (
   profiles: ClientProfile[],
   rows: ClientRequest[],
-  teamUsers: TeamUser[] = [],
 ): ClientDataType[] => {
   const result: ClientDataType[] = profiles.map((profile) => {
     const requests = rows
@@ -113,6 +109,8 @@ const mergeProfilesWithRequests = (
       status: mapStatus(r.status),
       createdAt: formatRelativeActivityAr(r.created_at),
       strategy: r.action_plan || 'غير محدد',
+      assignedUserId: r.assigned_user_id,
+      assignedUserName: r.assigned_user_name,
     }));
 
     const hasSearching = items.some((i) => i.status === 'بحث نشط');
@@ -124,9 +122,6 @@ const mergeProfilesWithRequests = (
         profile.created_at,
         ...requests.flatMap((r) => [r.updated_at, r.created_at]),
       ) || profile.created_at;
-    const assignedUser = teamUsers.find((user) => user.id === profile.assigned_user_id);
-    const assignedUserName = assignedUser ? getUserDisplayName(assignedUser) : profile.assigned_user_name || 'غير محدد';
-
     return {
       key: profileKey(profile),
       profileId: profile.id,
@@ -135,11 +130,6 @@ const mergeProfilesWithRequests = (
       phone: profile.phone_number || latest?.phone_number || 'غير متوفر',
       lastActivity: formatRelativeActivityAr(lastActivityAt),
       status,
-      ownerEmployee: {
-        id: profile.assigned_user_id,
-        name: assignedUserName,
-        avatarText: assignedUserName.trim().charAt(0) || '؟',
-      },
       requests: items,
     };
   });
@@ -156,6 +146,8 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
   const [clients, setClients] = useState<ClientDataType[]>([]);
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [assigningMap, setAssigningMap] = useState<Record<string, boolean>>({});
+  const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
+  const [assignmentTarget, setAssignmentTarget] = useState<ClientDataType | null>(null);
   const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolean>>({});
   const canAssignEmployee = currentUser?.role === 'owner' || currentUser?.role === 'manager';
   // Real stats from API
@@ -172,18 +164,18 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
         getClientRequestsStats().catch(() => null),
       ]);
       setTeamUsers(teamUsersData.filter((user) => user.status === 'active'));
-      setClients(mergeProfilesWithRequests(requestProfilesData, rawRequestsData, teamUsersData));
+      setClients(mergeProfilesWithRequests(requestProfilesData, rawRequestsData));
       setRequestsStats(statsData);
     } catch {
       message.error('تعذر تحميل الطلبات.');
     }
   };
 
-  const handleAssignEmployee = async (record: ClientDataType, userId: string | null) => {
+  const handleAssignEmployee = async (requestId: string, userId: string | null) => {
     const selectedUser = teamUsers.find((user) => user.id === userId);
-    setAssigningMap((prev) => ({ ...prev, [record.profileId]: true }));
+    setAssigningMap((prev) => ({ ...prev, [requestId]: true }));
     try {
-      await updateClientProfile(record.profileId, {
+      await updateClientRequest(requestId, {
         assigned_user_id: selectedUser?.id || null,
         assigned_user_name: selectedUser ? getUserDisplayName(selectedUser) : null,
       });
@@ -192,7 +184,7 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
     } catch (e: any) {
       message.error(e?.response?.data?.detail || 'تعذر تحديث الموظف المسؤول.');
     } finally {
-      setAssigningMap((prev) => ({ ...prev, [record.profileId]: false }));
+      setAssigningMap((prev) => ({ ...prev, [requestId]: false }));
     }
   };
 
@@ -214,6 +206,19 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
       setDeletingClientMap((prev) => ({ ...prev, [record.profileId]: false }));
     }
   };
+
+  const openAssignmentModal = (record: ClientDataType) => {
+    setAssignmentTarget(record);
+    setAssignmentModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!assignmentTarget) return;
+    const latest = clients.find((c) => c.profileId === assignmentTarget.profileId);
+    if (latest) {
+      setAssignmentTarget(latest);
+    }
+  }, [clients, assignmentTarget]);
 
 const handleAddClient = async () => {
     try {
@@ -348,56 +353,29 @@ const stats = useMemo(() => {
       render: (value: ClientStatus) => <Tag color={statusColor(value)} style={{ marginInlineEnd: 0, fontSize: 11 }}>{value}</Tag>,
     },
     {
-      title: 'الموظف المسؤول',
-      key: 'ownerEmployee',
-      width: 120,
+      title: 'المسؤول',
+      key: 'assigneeHint',
+      width: 170,
       responsive: ['xl'],
       render: (_: unknown, record) => {
-        if (!canAssignEmployee) {
+        if (canAssignEmployee) {
           return (
-            <Space>
-              <Avatar size="small">{record.ownerEmployee.avatarText}</Avatar>
-              <Text style={{ fontSize: 12 }}>{record.ownerEmployee.name}</Text>
-            </Space>
+            <Button
+              size="small"
+              onClick={() => openAssignmentModal(record)}
+              disabled={record.requests.length === 0}
+            >
+              تعيين الموظف
+            </Button>
           );
         }
-
-        const options = teamUsers.map((user) => {
-            const name = getUserDisplayName(user);
-            return {
-              value: user.id,
-              label: (
-                <Space>
-                  <Avatar size="small">{name.trim().charAt(0) || '؟'}</Avatar>
-                  <Text style={{ fontSize: 12 }}>{name}</Text>
-                </Space>
-              ),
-            };
-          });
-        if (record.ownerEmployee.id && !options.some((option) => option.value === record.ownerEmployee.id)) {
-          options.unshift({
-            value: record.ownerEmployee.id,
-            label: (
-              <Space>
-                <Avatar size="small">{record.ownerEmployee.avatarText}</Avatar>
-                <Text style={{ fontSize: 12 }}>{record.ownerEmployee.name}</Text>
-              </Space>
-            ),
-          });
+        const uniqueIds = Array.from(new Set(record.requests.map((r) => r.assignedUserId || '').filter(Boolean)));
+        if (uniqueIds.length > 1) return <Tag color="purple">متعدد</Tag>;
+        if (uniqueIds.length === 1) {
+          const user = teamUsers.find((u) => u.id === uniqueIds[0]);
+          return <Text style={{ fontSize: 12 }}>{user ? getUserDisplayName(user) : 'مخصص'}</Text>;
         }
-
-        return (
-          <Select
-            allowClear
-            size="small"
-            placeholder="اختر موظف"
-            value={record.ownerEmployee.id || undefined}
-            loading={!!assigningMap[record.profileId]}
-            style={{ width: 150 }}
-            onChange={(value) => handleAssignEmployee(record, value || null)}
-            options={options}
-          />
-        );
+        return <Text type="secondary" style={{ fontSize: 12 }}>غير مخصص</Text>;
       },
     },
     {
@@ -539,6 +517,28 @@ const stats = useMemo(() => {
                         <Text style={{ fontSize: 12 }}>
                           خطة العمل: {request.strategy}
                         </Text>
+                        <Space align="center" wrap>
+                          <Text type="secondary" style={{ fontSize: 12 }}>الموظف المسؤول:</Text>
+                          {canAssignEmployee ? (
+                            <Select
+                              allowClear
+                              size="small"
+                              placeholder="اختر موظف"
+                              value={request.assignedUserId || undefined}
+                              loading={!!assigningMap[request.id]}
+                              style={{ minWidth: 170 }}
+                              onChange={(value) => handleAssignEmployee(request.id, value || null)}
+                              options={teamUsers.map((user) => ({
+                                value: user.id,
+                                label: getUserDisplayName(user),
+                              }))}
+                            />
+                          ) : (
+                            <Tag color={request.assignedUserId ? 'blue' : 'default'} style={{ marginInlineEnd: 0 }}>
+                              {request.assignedUserName || 'غير مخصص'}
+                            </Tag>
+                          )}
+                        </Space>
                       </div>
                     </Card>
                   ))
@@ -597,6 +597,60 @@ const stats = useMemo(() => {
             </Text>
           </div>
         </Form>
+      </Modal>
+
+      <Modal
+        open={assignmentModalOpen}
+        title="تعيين الموظف المسؤول للطلبات"
+        onCancel={() => {
+          setAssignmentModalOpen(false);
+          setAssignmentTarget(null);
+        }}
+        footer={[
+          <Button
+            key="close"
+            type="primary"
+            onClick={() => {
+              setAssignmentModalOpen(false);
+              setAssignmentTarget(null);
+            }}
+          >
+            إغلاق
+          </Button>,
+        ]}
+        width={screens.xs && !screens.sm ? 'calc(100vw - 16px)' : 620}
+        style={{ direction: 'rtl' }}
+      >
+        {!assignmentTarget || assignmentTarget.requests.length === 0 ? (
+          <Text type="secondary">لا توجد طلبات لهذا العميل.</Text>
+        ) : (
+          <div style={{ display: 'grid', gap: 10, maxHeight: 440, overflowY: 'auto' }}>
+            {assignmentTarget.requests.map((request) => (
+              <Card key={request.id} size="small" style={{ borderRadius: 10 }}>
+                <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                  <Text strong>{request.title}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    الحالة: {request.status}
+                  </Text>
+                  <Select
+                    allowClear
+                    size="small"
+                    placeholder="اختر الموظف المسؤول عن هذا الطلب"
+                    value={request.assignedUserId || undefined}
+                    loading={!!assigningMap[request.id]}
+                    onChange={async (value) => {
+                      await handleAssignEmployee(request.id, value || null);
+                    }}
+                    options={teamUsers.map((user) => ({
+                      value: user.id,
+                      label: getUserDisplayName(user),
+                    }))}
+                  />
+                </Space>
+              </Card>
+            ))}
+          </div>
+        )}
       </Modal>
     </div>
   );

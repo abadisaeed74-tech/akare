@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Spin, Typography } from 'antd';
+import { Card, Spin, Typography } from 'antd';
 import { resolvePublicVideoUrl } from '../services/api';
 
 const { Text, Paragraph } = Typography;
@@ -41,6 +41,11 @@ function tiktokUrlNeedsServerResolve(href: string): boolean {
     return false;
   }
 }
+
+const isDirectPlayableUrl = (href: string): boolean => {
+  const lower = href.toLowerCase();
+  return lower.includes('.mp4') || lower.includes('.webm') || lower.includes('.m3u8') || lower.includes('video/');
+};
 
 export function parseSocialVideoUrl(value: string): SocialVideoParseResult {
   const href = normalizeExternalHref(value) || value.trim();
@@ -113,7 +118,7 @@ export function parseSocialVideoUrl(value: string): SocialVideoParseResult {
 const responsiveIframeBox: React.CSSProperties = {
   position: 'relative',
   width: '100%',
-  paddingTop: '56.25%',
+  paddingTop: '62.5%',
   background: '#000',
 };
 
@@ -143,7 +148,12 @@ const SocialVideoEmbed: React.FC<SocialVideoEmbedProps> = ({ url, className }) =
   useEffect(() => {
     setResolvedUrl(null);
     setResolveFailed(false);
-    if (!tiktokUrlNeedsServerResolve(url)) return;
+    const parsed = parseSocialVideoUrl(url);
+    const shouldResolve =
+      parsed.kind === 'tiktok' ||
+      parsed.kind === 'unsupported' ||
+      tiktokUrlNeedsServerResolve(url);
+    if (!shouldResolve) return;
 
     let cancelled = false;
     (async () => {
@@ -163,6 +173,11 @@ const SocialVideoEmbed: React.FC<SocialVideoEmbedProps> = ({ url, className }) =
   }, [url]);
 
   const parsed = useMemo(() => parseSocialVideoUrl(resolvedUrl || url), [url, resolvedUrl]);
+  const playableResolved = useMemo(() => {
+    const candidate = (resolvedUrl || '').trim();
+    if (!candidate) return null;
+    return isDirectPlayableUrl(candidate) ? candidate : null;
+  }, [resolvedUrl]);
 
   const header = (
     <div style={{ padding: '8px 12px', fontWeight: 700, color: '#2f4d37' }}>{parsed.label}</div>
@@ -210,7 +225,7 @@ const SocialVideoEmbed: React.FC<SocialVideoEmbedProps> = ({ url, className }) =
     return (
       <div className={className} style={{ border: '1px solid #e4e7df', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
         {header}
-        <div style={{ ...responsiveIframeBox, minHeight: 480, borderRadius: '0 0 12px 12px' }}>
+        <div style={{ ...responsiveIframeBox, minHeight: 620, borderRadius: '0 0 12px 12px' }}>
           <iframe
             src={parsed.embedSrc}
             title="TikTok embed"
@@ -236,6 +251,19 @@ const SocialVideoEmbed: React.FC<SocialVideoEmbedProps> = ({ url, className }) =
     );
   }
 
+  if (playableResolved) {
+    return (
+      <div className={className} style={{ border: '1px solid #e4e7df', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
+        {header}
+        <div style={{ ...responsiveIframeBox, borderRadius: '0 0 12px 12px' }}>
+          <video controls playsInline preload="metadata" style={responsiveIframe}>
+            <source src={playableResolved} />
+          </video>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Card className={className} size="small" style={{ borderRadius: 12 }}>
       <Text strong>{parsed.label}</Text>
@@ -247,9 +275,9 @@ const SocialVideoEmbed: React.FC<SocialVideoEmbedProps> = ({ url, className }) =
       <Paragraph ellipsis={{ rows: 2 }} style={{ marginTop: 8 }}>
         {parsed.href}
       </Paragraph>
-      <Button href={parsed.href} target="_blank" rel="noopener noreferrer">
-        فتح الرابط
-      </Button>
+      <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+        تعذر تضمين الفيديو داخل الصفحة حالياً.
+      </Paragraph>
     </Card>
   );
 };

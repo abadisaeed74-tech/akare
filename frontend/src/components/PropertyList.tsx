@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, message, Image, Upload } from 'antd';
+import { List, Card, Typography, Tag, Empty, Button, Modal, Form, Input, InputNumber, Select, Switch, message, Image, Upload } from 'antd';
 import type { UploadFile } from 'antd/es/upload/interface';
 import { Property, updateProperty, deleteProperty, deletePropertyByRawText, resolveMediaUrl, uploadFile, type UserPublic } from '../services/api';
 import { EyeOutlined } from '@ant-design/icons';
@@ -148,6 +148,8 @@ const PropertyList: React.FC<PropertyListProps> = ({ properties, loading, onRefr
             marketer_contact_number:
                 property.marketer_contact_number === 'غير مذكور' ? '' : property.marketer_contact_number,
             videos_text: (property.videos || []).join('\n'),
+            landing_form_enabled: property.landing_form_enabled !== false,
+            landing_primary_cta: property.landing_primary_cta || 'whatsapp',
         });
         setIsModalVisible(true);
     };
@@ -257,7 +259,7 @@ const handleDetailsModalClose = () => {
             message.error('لا يمكن مشاركة عرض بدون معرّف صالح.');
             return;
         }
-        const url = `${window.location.origin}/share/${property.id}`;
+        const url = `${window.location.origin}/p/${property.id}`;
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 await navigator.clipboard.writeText(url);
@@ -275,6 +277,28 @@ const handleDetailsModalClose = () => {
             console.error(e);
             message.error('تعذّر نسخ الرابط، يمكنك نسخه يدويًا من شريط العنوان بعد الفتح.');
         }
+    };
+
+    const handleCopyLandingLink = async (property: Property) => {
+        if (!property.id) {
+            message.error('لا يمكن إنشاء رابط صفحة هبوط بدون معرّف صالح.');
+            return;
+        }
+        const url = `${window.location.origin}/ad/${property.id}`;
+        try {
+            await navigator.clipboard.writeText(url);
+            message.success('تم نسخ رابط صفحة الهبوط.');
+        } catch {
+            message.error('تعذّر نسخ رابط صفحة الهبوط.');
+        }
+    };
+
+    const handleOpenLandingPage = (property: Property) => {
+        if (!property.id) {
+            message.error('لا يمكن فتح صفحة هبوط بدون معرّف صالح.');
+            return;
+        }
+        window.open(`${window.location.origin}/ad/${property.id}`, '_blank', 'noopener,noreferrer');
     };
 
     if (loading) {
@@ -457,7 +481,7 @@ const handleDetailsModalClose = () => {
                                 onClick={() => handleShare(property)}
                                 style={actionBtnBaseStyle}
                             >
-                                مشاركة
+                                نسخ رابط المشاركة
                             </Button>
                             {canEdit && (
                                 <Button
@@ -554,6 +578,34 @@ https://youtube.com/shorts/VIDEO_ID
 https://www.instagram.com/reel/REEL_ID/`}
                         />
                     </Form.Item>
+                    <Form.Item
+                        label="تفعيل نموذج صفحة الهبوط"
+                        name="landing_form_enabled"
+                        valuePropName="checked"
+                    >
+                        <Switch checkedChildren="مفعّل" unCheckedChildren="معطّل" />
+                    </Form.Item>
+                    <Form.Item
+                        label="نوع CTA الأساسي في صفحة الهبوط"
+                        name="landing_primary_cta"
+                    >
+                        <Select
+                            options={[
+                                { value: 'whatsapp', label: 'واتساب' },
+                                { value: 'call', label: 'اتصال' },
+                                { value: 'inquiry', label: 'نموذج الطلب' },
+                                { value: 'mixed', label: 'مزيج (واتساب + اتصال + فورم)' },
+                            ]}
+                        />
+                    </Form.Item>
+                    {editingProperty?.id && (
+                        <Form.Item label="أدوات التسويق">
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                                <Button onClick={() => handleCopyLandingLink(editingProperty)}>نسخ رابط صفحة الهبوط</Button>
+                                <Button onClick={() => handleOpenLandingPage(editingProperty)}>فتح صفحة الهبوط</Button>
+                            </div>
+                        </Form.Item>
+                    )}
                 </Form>
             </Modal>
 

@@ -18,10 +18,14 @@ const AuthPage: React.FC = () => {
     setActiveTab(mode === 'register' ? 'register' : 'login');
   }, [mode]);
 
-  const handleRegister = async (values: { email: string; password: string }) => {
+  const handleRegister = async (values: { email: string; password: string; confirm_password: string }) => {
     try {
-      await registerUser(values);
-      message.success('تم إنشاء الحساب بنجاح، قم بتسجيل الدخول الآن.');
+      await registerUser({ email: values.email, password: values.password });
+      const res = await loginUser(values.email, values.password);
+      setAuthToken(res.access_token);
+      await getCurrentUser();
+      message.success('تم إنشاء الحساب وتسجيل الدخول بنجاح.');
+      navigate('/app', { replace: true });
     } catch (error: any) {
       const detail = error.response?.data?.detail || 'فشل في إنشاء الحساب.';
       message.error(`خطأ: ${detail}`);
@@ -97,6 +101,24 @@ const AuthPage: React.FC = () => {
                     label="كلمة المرور"
                     name="password"
                     rules={[{ required: true, message: 'الرجاء إدخال كلمة المرور' }]}
+                  >
+                    <Input.Password />
+                  </Form.Item>
+                  <Form.Item
+                    label="تأكيد كلمة المرور"
+                    name="confirm_password"
+                    dependencies={['password']}
+                    rules={[
+                      { required: true, message: 'الرجاء تأكيد كلمة المرور' },
+                      ({ getFieldValue }) => ({
+                        validator(_, value) {
+                          if (!value || getFieldValue('password') === value) {
+                            return Promise.resolve();
+                          }
+                          return Promise.reject(new Error('كلمتا المرور غير متطابقتين'));
+                        },
+                      }),
+                    ]}
                   >
                     <Input.Password />
                   </Form.Item>

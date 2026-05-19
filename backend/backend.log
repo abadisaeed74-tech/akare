@@ -210,3 +210,7 @@ INFO:     127.0.0.1:60448 - "GET /clients/offers HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60449 - "GET /clients/profiles?client_type=offer HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60468 - "GET /settings/team/users HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60450 - "GET /properties HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50757 - "GET /appointments HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:50758 - "GET /me HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:50759 - "GET /properties HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:50760 - "GET /dashboard/overview HTTP/1.1" 401 Unauthorized

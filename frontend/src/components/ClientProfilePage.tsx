@@ -63,12 +63,14 @@ import {
   getClientOffer,
   getClientProfileByClient,
   getClientProfile,
+  getTeamUsers,
   deleteClientProfile,
   type ClientRequest,
   type ClientOffer,
   type Property,
   type ClientNote,
   type ClientProfile,
+  type TeamUser,
 } from '../services/api';
 import { parseBackendUtcMs } from '../utils/relativeActivityAr';
 
@@ -237,6 +239,7 @@ const [savingNote, setSavingNote] = useState(false);
   const [offersMap, setOffersMap] = useState<Record<string, any[]>>({});
 const [offersModalOpen, setOffersModalOpen] = useState(false);
   const [allProperties, setAllProperties] = useState<Property[]>([]);
+  const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   
 // Offer notes state
   const [offerNotesMap, setOfferNotesMap] = useState<Record<string, ClientNote[]>>({});
@@ -289,8 +292,12 @@ const load = useCallback(async () => {
     setLoading(true);
     try {
       // First load all properties (needed for offers)
-      const properties = await getProperties({});
+      const [properties, users] = await Promise.all([
+        getProperties({}),
+        getTeamUsers().catch(() => [] as TeamUser[]),
+      ]);
       setAllProperties(properties);
+      setTeamUsers(users.filter((u) => u.status === 'active'));
       
       // Load persistent client profile: prefer stable id from URL (?profile_id=) then name/phone
       const profileIdFromQuery = profileIdParam || null;
@@ -393,6 +400,7 @@ const openEdit = (item: ClientRequest) => {
 deadline_at: item.deadline_at ? dayjs.utc(item.deadline_at).tz(SAUDI_TZ) : null,
       reminder_before_minutes: item.reminder_before_minutes ?? 120,
       follow_up_details: item.follow_up_details || undefined,
+      assigned_user_id: item.assigned_user_id || undefined,
     });
   };
 
@@ -434,6 +442,12 @@ reminder_type: values.reminder_type ?? null,
         deadline_at: values.deadline_at ? values.deadline_at.toISOString() : null,
         reminder_before_minutes: values.reminder_before_minutes ?? 120,
         follow_up_details: values.follow_up_details || null,
+        assigned_user_id: values.assigned_user_id || null,
+        assigned_user_name: values.assigned_user_id
+          ? teamUsers.find((u) => u.id === values.assigned_user_id)?.display_name
+            || teamUsers.find((u) => u.id === values.assigned_user_id)?.email
+            || null
+          : null,
       });
       message.success('تم تحديث الطلب.');
       setEditing(null);
@@ -725,6 +739,7 @@ const handleDeleteOfferNote = async (noteId: string) => {
 deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : null,
       reminder_before_minutes: offer.reminder_before_minutes ?? 120,
       follow_up_details: offer.follow_up_details || undefined,
+      assigned_user_id: offer.assigned_user_id || undefined,
     });
     setReminderModalOpen(true);
   };
@@ -739,6 +754,12 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
         deadline_at: values.deadline_at ? values.deadline_at.toISOString() : null,
         reminder_before_minutes: values.reminder_before_minutes ?? 120,
         follow_up_details: values.follow_up_details || null,
+        assigned_user_id: values.assigned_user_id || null,
+        assigned_user_name: values.assigned_user_id
+          ? teamUsers.find((u) => u.id === values.assigned_user_id)?.display_name
+            || teamUsers.find((u) => u.id === values.assigned_user_id)?.email
+            || null
+          : null,
       });
       message.success('تم حفظ المتابعة.');
       setReminderModalOpen(false);
@@ -1009,6 +1030,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                       </Tag>
                     )}
                     {item.reminder_type ? <Tag>{reminderTypeLabel[item.reminder_type]}</Tag> : null}
+                    {item.assigned_user_name ? <Tag color="blue">المسؤول: {item.assigned_user_name}</Tag> : <Tag>غير مخصص</Tag>}
                   </Space>
 
 {(item.budget_min || item.budget_max) && (
@@ -1233,6 +1255,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                               </Tag>
                             )}
 {offer.reminder_type ? <Tag>{getReminderTypeLabel(offer.reminder_type)}</Tag> : null}
+                            {offer.assigned_user_name ? <Tag color="blue">المسؤول: {offer.assigned_user_name}</Tag> : <Tag>غير مخصص</Tag>}
                           </div>
 <Tag color={getOfferStatusColor(mapOfferStatus(offer.status))} style={{ fontSize: 11, marginTop: 'auto', width: 'fit-content' }}>
                             <Select value={mapOfferStatus(offer.status)} style={{ width: 85 }} size="small" variant="borderless" onChange={(val) => handleOfferStatusChange(offer.id, val as string)} options={[{ value: 'جديد', label: 'جديد' }, { value: ' جاري ', label: 'جاري' }, { value: 'اغلاق', label: 'مغلق' }]} />
@@ -1334,6 +1357,16 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                       { value: 'searching', label: 'جاري البحث' },
                       { value: 'closed', label: 'تم الإغلاق' },
                     ]}
+                  />
+                </Form.Item>
+                <Form.Item name="assigned_user_id" label="الموظف المسؤول">
+                  <Select
+                    allowClear
+                    placeholder="اختر الموظف المسؤول"
+                    options={teamUsers.map((user) => ({
+                      value: user.id,
+                      label: user.display_name?.trim() || user.email,
+                    }))}
                   />
                 </Form.Item>
 <Form.Item name="reminder_type" label="نوع التذكير">
@@ -1592,6 +1625,16 @@ await createClientOffer({
                     format="YYYY-MM-DD h:mm A"
                     style={{ width: '100%' }}
                     placeholder="اختر التاريخ والوقت"
+                  />
+                </Form.Item>
+                <Form.Item name="assigned_user_id" label="الموظف المسؤول">
+                  <Select
+                    allowClear
+                    placeholder="اختر الموظف المسؤول"
+                    options={teamUsers.map((user) => ({
+                      value: user.id,
+                      label: user.display_name?.trim() || user.email,
+                    }))}
                   />
                 </Form.Item>
 <Form.Item name="follow_up_details" label="تفاصيل المتابعة - ما الذي سأقوم به مع العميل">

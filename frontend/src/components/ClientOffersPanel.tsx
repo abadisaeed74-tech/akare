@@ -42,11 +42,6 @@ interface ClientOfferDataType {
   phone: string;
   lastActivity: string;
   status: ClientOfferStatus;
-  ownerEmployee: {
-    id?: string | null;
-    name: string;
-    avatarText: string;
-  };
   offers: ClientOfferItem[];
 }
 
@@ -56,6 +51,8 @@ interface ClientOfferItem {
   property?: Property;
   status: ClientOfferStatus;
   createdAt: string;
+  assignedUserId?: string | null;
+  assignedUserName?: string | null;
 }
 
 interface Props {
@@ -96,7 +93,7 @@ const profileKey = (profile: ClientProfile): string => (
 );
 
 const getUserDisplayName = (user: TeamUser): string => (
-  user.display_name?.trim() || (user.role === 'owner' ? 'مالك الحساب' : user.role === 'manager' ? 'مدير بدون اسم' : 'موظف بدون اسم')
+  user.display_name?.trim() || user.email || (user.role === 'owner' ? 'مالك الحساب' : user.role === 'manager' ? 'مدير' : 'موظف')
 );
 
 const sameClientIdentity = (profile: ClientProfile, row: ClientOffer): boolean => {
@@ -111,7 +108,6 @@ const mergeProfilesWithOffers = (
   profiles: ClientProfile[],
   rows: ClientOffer[],
   allProperties: Property[],
-  teamUsers: TeamUser[] = [],
 ): ClientOfferDataType[] => {
   const propertyMap = new Map<string, Property>();
   for (const p of allProperties) {
@@ -131,6 +127,8 @@ const mergeProfilesWithOffers = (
       property: o.property_id ? propertyMap.get(o.property_id) : undefined,
       status: mapOfferStatus(o.status),
       createdAt: formatRelativeActivityAr(o.created_at),
+      assignedUserId: o.assigned_user_id,
+      assignedUserName: o.assigned_user_name,
     }));
 
     const hasNew = items.some((i) => i.status === 'جديد');
@@ -142,9 +140,6 @@ const mergeProfilesWithOffers = (
         profile.created_at,
         ...offers.map((o) => o.created_at),
       ) || profile.created_at;
-    const assignedUser = teamUsers.find((user) => user.id === profile.assigned_user_id);
-    const assignedUserName = assignedUser ? getUserDisplayName(assignedUser) : profile.assigned_user_name || 'غير محدد';
-
     return {
       key: profileKey(profile),
       profileId: profile.id,
@@ -153,11 +148,6 @@ const mergeProfilesWithOffers = (
       phone: profile.phone_number || latest?.phone_number || 'غير متوفر',
       lastActivity: formatRelativeActivityAr(lastActivityAt),
       status,
-      ownerEmployee: {
-        id: profile.assigned_user_id,
-        name: assignedUserName,
-        avatarText: assignedUserName.trim().charAt(0) || '؟',
-      },
       offers: items,
     };
   });
@@ -174,6 +164,8 @@ const ClientOffersPanel: React.FC<Props> = ({ loading = false, currentUser }) =>
   const [savingMap, setSavingMap] = useState<Record<string, boolean>>({});
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [assigningMap, setAssigningMap] = useState<Record<string, boolean>>({});
+  const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
+  const [assignmentTarget, setAssignmentTarget] = useState<ClientOfferDataType | null>(null);
 const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolean>>({});
   const canAssignEmployee = currentUser?.role === 'owner' || currentUser?.role === 'manager';
   const [creating, setCreating] = useState(false);
@@ -202,18 +194,18 @@ const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolea
       ]);
       setAllProperties(propertiesData);
       setTeamUsers(teamUsersData.filter((user) => user.status === 'active'));
-      setClients(mergeProfilesWithOffers(offerProfilesData, offersData, propertiesData, teamUsersData));
+      setClients(mergeProfilesWithOffers(offerProfilesData, offersData, propertiesData));
       setOffersStats(statsData);
     } catch {
       message.error('تعذر تحميل العروض.');
     }
   };
 
-  const handleAssignEmployee = async (record: ClientOfferDataType, userId: string | null) => {
+  const handleAssignEmployee = async (offerId: string, userId: string | null) => {
     const selectedUser = teamUsers.find((user) => user.id === userId);
-    setAssigningMap((prev) => ({ ...prev, [record.profileId]: true }));
+    setAssigningMap((prev) => ({ ...prev, [offerId]: true }));
     try {
-      await updateClientProfile(record.profileId, {
+      await updateClientOffer(offerId, {
         assigned_user_id: selectedUser?.id || null,
         assigned_user_name: selectedUser ? getUserDisplayName(selectedUser) : null,
       });
@@ -222,7 +214,7 @@ const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolea
     } catch (e: any) {
       message.error(e?.response?.data?.detail || 'تعذر تحديث الموظف المسؤول.');
     } finally {
-      setAssigningMap((prev) => ({ ...prev, [record.profileId]: false }));
+      setAssigningMap((prev) => ({ ...prev, [offerId]: false }));
     }
   };
 
@@ -244,6 +236,19 @@ const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolea
       setDeletingClientMap((prev) => ({ ...prev, [record.profileId]: false }));
     }
   };
+
+  const openAssignmentModal = (record: ClientOfferDataType) => {
+    setAssignmentTarget(record);
+    setAssignmentModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!assignmentTarget) return;
+    const latest = clients.find((c) => c.profileId === assignmentTarget.profileId);
+    if (latest) {
+      setAssignmentTarget(latest);
+    }
+  }, [clients, assignmentTarget]);
 
 const handleDeleteOffer = async (offerId: string) => {
     setDeletingMap((prev) => ({ ...prev, [offerId]: true }));
@@ -496,56 +501,29 @@ const stats = useMemo(() => {
       ),
     },
     {
-      title: 'الموظف المسؤول',
-      key: 'ownerEmployee',
-      width: 120,
+      title: 'المسؤول',
+      key: 'assigneeHint',
+      width: 170,
       responsive: ['xl'],
       render: (_: unknown, record) => {
-        if (!canAssignEmployee) {
+        if (canAssignEmployee) {
           return (
-            <Space>
-              <Avatar size="small">{record.ownerEmployee.avatarText}</Avatar>
-              <Text style={{ fontSize: 12 }}>{record.ownerEmployee.name}</Text>
-            </Space>
+            <Button
+              size="small"
+              onClick={() => openAssignmentModal(record)}
+              disabled={record.offers.length === 0}
+            >
+              تعيين الموظف
+            </Button>
           );
         }
-
-        const options = teamUsers.map((user) => {
-            const name = getUserDisplayName(user);
-            return {
-              value: user.id,
-              label: (
-                <Space>
-                  <Avatar size="small">{name.trim().charAt(0) || '؟'}</Avatar>
-                  <Text style={{ fontSize: 12 }}>{name}</Text>
-                </Space>
-              ),
-            };
-          });
-        if (record.ownerEmployee.id && !options.some((option) => option.value === record.ownerEmployee.id)) {
-          options.unshift({
-            value: record.ownerEmployee.id,
-            label: (
-              <Space>
-                <Avatar size="small">{record.ownerEmployee.avatarText}</Avatar>
-                <Text style={{ fontSize: 12 }}>{record.ownerEmployee.name}</Text>
-              </Space>
-            ),
-          });
+        const uniqueIds = Array.from(new Set(record.offers.map((o) => o.assignedUserId || '').filter(Boolean)));
+        if (uniqueIds.length > 1) return <Tag color="purple">متعدد</Tag>;
+        if (uniqueIds.length === 1) {
+          const user = teamUsers.find((u) => u.id === uniqueIds[0]);
+          return <Text style={{ fontSize: 12 }}>{user ? getUserDisplayName(user) : 'مخصص'}</Text>;
         }
-
-        return (
-          <Select
-            allowClear
-            size="small"
-            placeholder="اختر موظف"
-            value={record.ownerEmployee.id || undefined}
-            loading={!!assigningMap[record.profileId]}
-            style={{ width: 150 }}
-            onChange={(value) => handleAssignEmployee(record, value || null)}
-            options={options}
-          />
-        );
+        return <Text type="secondary" style={{ fontSize: 12 }}>غير مخصص</Text>;
       },
     },
     {
@@ -757,6 +735,28 @@ return (
                         </Text>
                         <div style={{ marginTop: 4 }}>
                           <Space size="small" wrap>
+                            <Space size={6} wrap>
+                              <Text type="secondary" style={{ fontSize: 12 }}>المسؤول:</Text>
+                              {canAssignEmployee ? (
+                                <Select
+                                  allowClear
+                                  size="small"
+                                  placeholder="اختر موظف"
+                                  value={offer.assignedUserId || undefined}
+                                  loading={!!assigningMap[offer.id]}
+                                  style={{ minWidth: 150 }}
+                                  onChange={(value) => handleAssignEmployee(offer.id, value || null)}
+                                  options={teamUsers.map((user) => ({
+                                    value: user.id,
+                                    label: getUserDisplayName(user),
+                                  }))}
+                                />
+                              ) : (
+                                <Tag color={offer.assignedUserId ? 'blue' : 'default'} style={{ marginInlineEnd: 0 }}>
+                                  {offer.assignedUserName || 'غير مخصص'}
+                                </Tag>
+                              )}
+                            </Space>
                             <Button
                               size="small"
                               type="text"
@@ -939,6 +939,64 @@ return (
             ))
           )}
         </div>
+      </Modal>
+
+      <Modal
+        open={assignmentModalOpen}
+        title="تعيين الموظف المسؤول للعروض"
+        onCancel={() => {
+          setAssignmentModalOpen(false);
+          setAssignmentTarget(null);
+        }}
+        footer={[
+          <Button
+            key="close"
+            type="primary"
+            onClick={() => {
+              setAssignmentModalOpen(false);
+              setAssignmentTarget(null);
+            }}
+          >
+            إغلاق
+          </Button>,
+        ]}
+        width={screens.xs && !screens.sm ? 'calc(100vw - 16px)' : 620}
+        style={{ direction: 'rtl' }}
+      >
+        {!assignmentTarget || assignmentTarget.offers.length === 0 ? (
+          <Text type="secondary">لا توجد عروض لهذا العميل.</Text>
+        ) : (
+          <div style={{ display: 'grid', gap: 10, maxHeight: 440, overflowY: 'auto' }}>
+            {assignmentTarget.offers.map((offer) => (
+              <Card key={offer.id} size="small" style={{ borderRadius: 10 }}>
+                <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                  <Text strong>
+                    {offer.property
+                      ? `${offer.property.property_type} - ${offer.property.neighborhood || 'غير محدد'}`
+                      : 'عرض بدون عقار محدد'}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    الحالة: {offer.status}
+                  </Text>
+                  <Select
+                    allowClear
+                    size="small"
+                    placeholder="اختر الموظف المسؤول عن هذا العرض"
+                    value={offer.assignedUserId || undefined}
+                    loading={!!assigningMap[offer.id]}
+                    onChange={async (value) => {
+                      await handleAssignEmployee(offer.id, value || null);
+                    }}
+                    options={teamUsers.map((user) => ({
+                      value: user.id,
+                      label: getUserDisplayName(user),
+                    }))}
+                  />
+                </Space>
+              </Card>
+            ))}
+          </div>
+        )}
       </Modal>
     </div>
   );

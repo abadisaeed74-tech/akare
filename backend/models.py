@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict
 from datetime import datetime
 
 
@@ -22,6 +22,8 @@ class PropertyInput(BaseModel):
     videos: List[str] = Field(default_factory=list)
     documents: List[str] = Field(default_factory=list)
     map_url: Optional[str] = None
+    landing_form_enabled: bool = True
+    landing_primary_cta: Literal["whatsapp", "call", "inquiry", "mixed"] = "whatsapp"
 
 
 class Property(BaseModel):
@@ -49,6 +51,8 @@ class Property(BaseModel):
     documents: List[str] = Field(default_factory=list)
     map_url: Optional[str] = None
     view_count: int = 0
+    landing_form_enabled: bool = True
+    landing_primary_cta: Literal["whatsapp", "call", "inquiry", "mixed"] = "whatsapp"
     match_level: Optional[int] = None
     match_score: Optional[int] = None
 
@@ -74,6 +78,8 @@ class PropertyUpdate(BaseModel):
     videos: Optional[List[str]] = None
     documents: Optional[List[str]] = None
     map_url: Optional[str] = None
+    landing_form_enabled: Optional[bool] = None
+    landing_primary_cta: Optional[Literal["whatsapp", "call", "inquiry", "mixed"]] = None
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -101,7 +107,7 @@ class UserPublic(UserBase):
     status: str = "active"
     company_owner_id: Optional[str] = None
     display_name: Optional[str] = None
-    permissions: Optional[dict] = None
+    permissions: Optional["EmployeePermissions"] = None
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -157,7 +163,9 @@ class TeamUserPublic(BaseModel):
     role: str  # "owner" | "manager" | "employee"
     status: str  # "active" | "disabled"
     display_name: Optional[str] = None
-    permissions: Optional[dict] = None
+    permissions: Optional["EmployeePermissions"] = None
+    assigned_clients_count: Optional[int] = None
+    assigned_properties_count: Optional[int] = None
 
 
 class SettingsOverview(BaseModel):
@@ -199,14 +207,35 @@ class EmployeeCreate(BaseModel):
     password: str
     role: Literal["manager", "employee"] = "employee"
     display_name: Optional[str] = None
-    permissions: Optional[dict] = None
+    permissions: Optional["EmployeePermissions"] = None
 
 
 class EmployeeUpdate(BaseModel):
     status: Optional[str] = None  # "active" | "disabled"
     role: Optional[Literal["manager", "employee"]] = None
     display_name: Optional[str] = None
-    permissions: Optional[dict] = None
+    permissions: Optional["EmployeePermissions"] = None
+
+
+class EmployeePermissions(BaseModel):
+    can_add_property: bool = True
+    can_edit_property: bool = True
+    can_delete_property: bool = False
+    can_manage_files: bool = True
+
+    can_view_all_properties: bool = False
+    can_view_assigned_only: bool = True
+
+    can_manage_clients: bool = True
+    can_view_all_clients: bool = False
+    can_view_own_clients_only: bool = True
+
+    can_manage_appointments: bool = True
+
+    can_view_analytics: bool = False
+    can_export_data: bool = False
+
+    can_change_assignee: bool = False
 
 
 class PlatformStats(BaseModel):
@@ -257,12 +286,15 @@ class PlatformOfficeDetail(PlatformOfficeSummary):
 class PlatformAdminSubscriptionActionRequest(BaseModel):
     action: Literal["extend", "grant_free", "cancel"]
     days: Optional[int] = Field(default=None, ge=1, le=3650)
+    plan_key: Optional[str] = None
 
 
 class PropertyInquiryCreate(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
     message: str
+    request_type: Optional[Literal["general", "visit", "location", "similar", "booking"]] = "general"
+    source: Optional[str] = "public_page"
 
 
 class PropertyInquiryPublic(BaseModel):
@@ -288,6 +320,8 @@ class DashboardOverview(BaseModel):
     total_properties: int
     total_views: int
     total_inquiries: int
+    total_client_requests: int = 0
+    total_client_offers: int = 0
     recent_inquiries: List[PropertyInquiryPublic] = Field(default_factory=list)
 
 
@@ -298,6 +332,8 @@ class ClientRequestInput(BaseModel):
     profile_id: Optional[str] = None
     client_name: Optional[str] = None
     phone_number: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
 
 
 class ClientRequestPublic(BaseModel):
@@ -322,6 +358,10 @@ class ClientRequestPublic(BaseModel):
     status: Literal["new", "searching", "closed"] = "new"
     # NEW: Follow-up details - what the employee will do with the client
     follow_up_details: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
+    lead_source: Optional[str] = None
+    related_property_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -345,6 +385,163 @@ class ClientRequestUpdate(BaseModel):
     status: Optional[Literal["new", "searching", "closed"]] = None
     # NEW: Follow-up details - what the employee will do with the client
     follow_up_details: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
+    lead_source: Optional[str] = None
+    related_property_id: Optional[str] = None
+
+
+class MarketingLeadCreate(BaseModel):
+    property_id: str
+    name: str
+    phone: str
+    notes: Optional[str] = None
+    request_type: Literal["general", "visit", "location", "similar", "booking"] = "general"
+    ad_source: Literal["tiktok", "snapchat", "instagram", "youtube", "google", "direct", "other"] = "direct"
+    session_id: Optional[str] = None
+    source_page: Optional[str] = "landing_page"
+    referrer: Optional[str] = None
+    landing_url: Optional[str] = None
+    browser_name: Optional[str] = None
+    device_type: Optional[str] = None
+
+
+class MarketingLeadPublic(BaseModel):
+    id: str
+    owner_id: str
+    property_id: str
+    name: str
+    phone: str
+    notes: Optional[str] = None
+    request_type: str = "general"
+    ad_source: str = "direct"
+    source_page: str = "landing_page"
+    status: Literal["new", "contacted", "qualified", "closed"] = "new"
+    visit_count: int = 0
+    clicked_whatsapp: bool = False
+    viewed_video: bool = False
+    watched_video: bool = False
+    completed_video: bool = False
+    submitted_form: bool = True
+    session_id: Optional[str] = None
+    session_started_at: Optional[datetime] = None
+    session_last_activity_at: Optional[datetime] = None
+    session_duration_seconds: int = 0
+    referrer: Optional[str] = None
+    landing_url: Optional[str] = None
+    browser_name: Optional[str] = None
+    device_type: Optional[str] = None
+    converted_to_client: bool = False
+    converted_client_type: Optional[Literal["request", "profile"]] = None
+    converted_client_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MarketingLeadConvertRequest(BaseModel):
+    target_type: Literal["request", "profile"]
+
+
+class MarketingLeadStatusUpdate(BaseModel):
+    status: Literal["new", "contacted", "qualified", "closed"]
+
+
+class MarketingLeadUpdate(BaseModel):
+    status: Optional[Literal["new", "contacted", "qualified", "closed"]] = None
+    notes: Optional[str] = None
+
+
+class MarketingEventCreate(BaseModel):
+    property_id: str
+    event_type: Literal[
+        "landing_visit",
+        "session_end",
+        "cta_whatsapp_click",
+        "cta_call_click",
+        "cta_primary_click",
+        "video_view",
+        "video_complete",
+        "form_view",
+        "form_submit",
+    ]
+    ad_source: Optional[Literal["tiktok", "snapchat", "instagram", "youtube", "google", "direct", "other"]] = "direct"
+    session_id: Optional[str] = None
+    metadata: Optional[Dict[str, str]] = None
+
+
+class MarketingOverview(BaseModel):
+    leads_today: int = 0
+    leads_month: int = 0
+    conversion_rate: float = 0.0
+    clicks_count: int = 0
+    visits_count: int = 0
+    unique_visitors_count: int = 0
+    average_session_duration_seconds: int = 0
+    top_source: str = "direct"
+    source_breakdown: Dict[str, int] = Field(default_factory=dict)
+    top_properties: List[Dict[str, str | int]] = Field(default_factory=list)
+
+
+class MarketingLandingPageStat(BaseModel):
+    property_id: str
+    leads_count: int = 0
+    visits_count: int = 0
+    unique_visitors_count: int = 0
+    conversion_rate: float = 0.0
+    top_source: str = "direct"
+
+
+class MarketingAnalytics(BaseModel):
+    daily_leads: List[Dict[str, int | str]] = Field(default_factory=list)
+    weekly_leads: List[Dict[str, int | str]] = Field(default_factory=list)
+    monthly_leads: List[Dict[str, int | str]] = Field(default_factory=list)
+    source_breakdown: Dict[str, int] = Field(default_factory=dict)
+    cta_breakdown: Dict[str, int] = Field(default_factory=dict)
+
+
+class MarketingLandingSourceStat(BaseModel):
+    source: str
+    visits: int = 0
+    clicks: int = 0
+    leads: int = 0
+    conversion_rate: float = 0.0
+
+
+class MarketingLandingSessionActivity(BaseModel):
+    source: str = "unknown"
+    activity: str = "landing_visit"
+    session_duration_seconds: int = 0
+    happened_at: datetime
+    device_type: str = "unknown"
+
+
+class MarketingLandingPageDetails(BaseModel):
+    property_id: str
+    visits_count: int = 0
+    unique_visitors_count: int = 0
+    average_session_duration_seconds: int = 0
+    leads_count: int = 0
+    conversion_rate: float = 0.0
+    traffic_sources: List[MarketingLandingSourceStat] = Field(default_factory=list)
+    cta_breakdown: Dict[str, int] = Field(default_factory=dict)
+    funnel: List[Dict[str, int | str]] = Field(default_factory=list)
+    session_activity: List[MarketingLandingSessionActivity] = Field(default_factory=list)
+
+
+class NotificationPublic(BaseModel):
+    id: str
+    user_id: str
+    owner_id: Optional[str] = None
+    type: str
+    category: str
+    title: str
+    message: str
+    read: bool = False
+    priority: Literal["low", "normal", "high"] = "normal"
+    link: Optional[str] = None
+    metadata: Dict[str, str] = Field(default_factory=dict)
+    created_at: datetime
+    read_at: Optional[datetime] = None
 
 
 # ===== Client Request Notes =====
@@ -386,6 +583,8 @@ class ClientOfferInput(BaseModel):
     property_id: str
     # NEW: Follow-up details - what the employee will do with the client
     follow_up_details: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
 
 
 class ClientOfferPublic(BaseModel):
@@ -402,6 +601,8 @@ class ClientOfferPublic(BaseModel):
     reminder_before_minutes: int = 120
     # NEW: Follow-up details - what the employee will do with the client
     follow_up_details: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
     created_at: datetime
 
 
@@ -415,6 +616,8 @@ class ClientOfferUpdate(BaseModel):
     reminder_before_minutes: Optional[int] = Field(default=None, ge=15, le=10080)
     # NEW: Follow-up details - what the employee will do with the client
     follow_up_details: Optional[str] = None
+    assigned_user_id: Optional[str] = None
+    assigned_user_name: Optional[str] = None
 
 
 # ===== Client Profiles (independent from requests/offers) =====
@@ -449,6 +652,30 @@ class ClientProfileUpdate(BaseModel):
     client_types: Optional[List[str]] = None
     assigned_user_id: Optional[str] = None
     assigned_user_name: Optional[str] = None
+
+
+class ClientOffersStatsResponse(BaseModel):
+    total_offers: int
+    active_offers: int
+    new_last_30_days: int
+    percentage_change: float
+    active_percentage_change: float
+
+
+class ClientRequestsStatsResponse(BaseModel):
+    total_requests: int
+    active_requests: int
+    new_requests: int
+    new_last_30_days: int
+    percentage_change: float
+    active_percentage_change: float
+    new_percentage_change: float
+
+
+class ClientProfilesStatsResponse(BaseModel):
+    total_clients: int
+    new_last_30_days: int
+    percentage_change: float
 
 
 # ===== Appointments =====

@@ -62,6 +62,8 @@ export interface Property {
   documents?: string[];
   map_url?: string | null;
   view_count?: number;
+  landing_form_enabled?: boolean;
+  landing_primary_cta?: 'whatsapp' | 'call' | 'inquiry' | 'mixed';
   // Match level from client request matching (1-4)
   _match_level?: number;
   match_level?: number;
@@ -75,12 +77,23 @@ export interface UserPublic {
   role?: 'owner' | 'manager' | 'employee';
   status?: 'active' | 'disabled';
   company_owner_id?: string | null;
-  permissions?: {
-    can_add_property?: boolean;
-    can_edit_property?: boolean;
-    can_delete_property?: boolean;
-    can_manage_files?: boolean;
-  } | null;
+  permissions?: EmployeePermissions | null;
+}
+
+export interface EmployeePermissions {
+  can_add_property?: boolean;
+  can_edit_property?: boolean;
+  can_delete_property?: boolean;
+  can_manage_files?: boolean;
+  can_view_all_properties?: boolean;
+  can_view_assigned_only?: boolean;
+  can_manage_clients?: boolean;
+  can_view_all_clients?: boolean;
+  can_view_own_clients_only?: boolean;
+  can_manage_appointments?: boolean;
+  can_view_analytics?: boolean;
+  can_export_data?: boolean;
+  can_change_assignee?: boolean;
 }
 
 // ===== Settings / Plans / Company types =====
@@ -126,12 +139,9 @@ export interface TeamUser {
   role: 'owner' | 'manager' | 'employee';
   status: 'active' | 'disabled';
   display_name?: string | null;
-  permissions?: {
-    can_add_property?: boolean;
-    can_edit_property?: boolean;
-    can_delete_property?: boolean;
-    can_manage_files?: boolean;
-  } | null;
+  permissions?: EmployeePermissions | null;
+  assigned_clients_count?: number | null;
+  assigned_properties_count?: number | null;
 }
 
 export interface SettingsOverview {
@@ -167,6 +177,8 @@ export interface DashboardOverview {
   total_properties: number;
   total_views: number;
   total_inquiries: number;
+  total_client_requests?: number;
+  total_client_offers?: number;
   recent_inquiries: PropertyInquiry[];
 }
 
@@ -176,6 +188,9 @@ export interface ClientRequest {
   raw_text: string;
   client_name: string;
   phone_number?: string | null;
+  profile_id?: string | null;
+  assigned_user_id?: string | null;
+  assigned_user_name?: string | null;
   property_type: string;
   city: string;
   neighborhoods: string[];
@@ -192,8 +207,101 @@ export interface ClientRequest {
   status: 'new' | 'searching' | 'closed';
   // NEW: Follow-up details - what the employee will do with the client
   follow_up_details?: string | null;
+  lead_source?: string | null;
+  related_property_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface MarketingLead {
+  id: string;
+  owner_id: string;
+  property_id: string;
+  name: string;
+  phone: string;
+  notes?: string | null;
+  request_type: 'general' | 'visit' | 'location' | 'similar' | 'booking';
+  ad_source: 'tiktok' | 'snapchat' | 'instagram' | 'youtube' | 'google' | 'direct' | 'other' | 'unknown';
+  source_page: string;
+  status: 'new' | 'contacted' | 'qualified' | 'closed';
+  visit_count: number;
+  clicked_whatsapp: boolean;
+  viewed_video: boolean;
+  watched_video: boolean;
+  completed_video: boolean;
+  submitted_form: boolean;
+  session_id?: string | null;
+  session_started_at?: string | null;
+  session_last_activity_at?: string | null;
+  session_duration_seconds: number;
+  referrer?: string | null;
+  landing_url?: string | null;
+  browser_name?: string | null;
+  device_type?: string | null;
+  converted_to_client: boolean;
+  converted_client_type?: 'request' | 'profile' | null;
+  converted_client_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MarketingOverview {
+  leads_today: number;
+  leads_month: number;
+  conversion_rate: number;
+  clicks_count: number;
+  visits_count: number;
+  unique_visitors_count: number;
+  average_session_duration_seconds: number;
+  top_source: string;
+  source_breakdown: Record<string, number>;
+  top_properties: Array<{ property_id: string; leads: number }>;
+}
+
+export interface MarketingLandingPageStat {
+  property_id: string;
+  leads_count: number;
+  visits_count: number;
+  unique_visitors_count: number;
+  conversion_rate: number;
+  top_source: string;
+}
+
+export interface MarketingAnalytics {
+  daily_leads: Array<{ period: string; count: number }>;
+  weekly_leads: Array<{ period: string; count: number }>;
+  monthly_leads: Array<{ period: string; count: number }>;
+  source_breakdown: Record<string, number>;
+  cta_breakdown: Record<string, number>;
+}
+
+export interface MarketingLandingSourceStat {
+  source: string;
+  visits: number;
+  clicks: number;
+  leads: number;
+  conversion_rate: number;
+}
+
+export interface MarketingLandingSessionActivity {
+  source: string;
+  activity: string;
+  session_duration_seconds: number;
+  happened_at: string;
+  device_type: string;
+}
+
+export interface MarketingLandingPageDetails {
+  property_id: string;
+  visits_count: number;
+  unique_visitors_count: number;
+  average_session_duration_seconds: number;
+  leads_count: number;
+  conversion_rate: number;
+  traffic_sources: MarketingLandingSourceStat[];
+  cta_breakdown: Record<string, number>;
+  funnel: Array<{ label: string; value: number }>;
+  session_activity: MarketingLandingSessionActivity[];
 }
 
 export interface PlatformStats {
@@ -269,6 +377,8 @@ export const createProperty = async (payload: {
   videos?: string[];
   documents?: string[];
   map_url?: string | null;
+  landing_form_enabled?: boolean;
+  landing_primary_cta?: 'whatsapp' | 'call' | 'inquiry' | 'mixed';
 }): Promise<Property> => {
   const response = await apiClient.post('/properties', payload);
   return response.data;
@@ -352,13 +462,17 @@ export const getPlatformOfficeDetail = async (
 
 export const platformAdminSubscriptionAction = async (
   ownerUserId: string,
-  payload: { action: 'extend' | 'grant_free' | 'cancel'; days?: number },
+  payload: { action: 'extend' | 'grant_free' | 'cancel'; days?: number; plan_key?: string },
 ): Promise<CompanySettings> => {
   const response = await apiClient.post(
     `/admin/platform-offices/${ownerUserId}/subscription-action`,
     payload,
   );
   return response.data;
+};
+
+export const platformAdminDeleteOffice = async (ownerUserId: string): Promise<void> => {
+  await apiClient.delete(`/admin/platform-offices/${ownerUserId}`);
 };
 
 // ===== Settings / Company API =====
@@ -460,14 +574,14 @@ export interface EmployeeCreatePayload {
   password: string;
   role?: 'manager' | 'employee';
   display_name?: string;
-  permissions?: Record<string, boolean>;
+  permissions?: EmployeePermissions;
 }
 
 export interface EmployeeUpdatePayload {
   status?: 'active' | 'disabled';
   role?: 'manager' | 'employee';
   display_name?: string;
-  permissions?: Record<string, boolean>;
+  permissions?: EmployeePermissions;
 }
 
 export const createEmployeeUser = async (payload: EmployeeCreatePayload): Promise<TeamUser> => {
@@ -561,9 +675,92 @@ export const resolvePublicVideoUrl = async (shareUrl: string): Promise<string> =
 
 export const createPublicPropertyInquiry = async (
   propertyId: string,
-  payload: { name?: string; phone?: string; message: string },
+  payload: {
+    name?: string;
+    phone?: string;
+    message: string;
+    request_type?: 'general' | 'visit' | 'location' | 'similar' | 'booking';
+    source?: 'public_page' | 'landing_page';
+  },
 ): Promise<PropertyInquiry> => {
   const response = await apiClient.post(`/public/properties/${propertyId}/inquiries`, payload);
+  return response.data;
+};
+
+export const createPublicMarketingEvent = async (payload: {
+  property_id: string;
+  event_type: 'landing_visit' | 'session_end' | 'cta_whatsapp_click' | 'cta_call_click' | 'cta_primary_click' | 'video_view' | 'video_complete' | 'form_view' | 'form_submit';
+  ad_source?: 'tiktok' | 'snapchat' | 'instagram' | 'youtube' | 'google' | 'direct' | 'other' | 'unknown';
+  session_id?: string;
+  metadata?: Record<string, string>;
+}): Promise<void> => {
+  await apiClient.post('/public/marketing/events', payload);
+};
+
+export const createPublicMarketingLead = async (payload: {
+  property_id: string;
+  name: string;
+  phone: string;
+  notes?: string;
+  request_type: 'general' | 'visit' | 'location' | 'similar' | 'booking';
+  ad_source?: 'tiktok' | 'snapchat' | 'instagram' | 'youtube' | 'google' | 'direct' | 'other' | 'unknown';
+  session_id?: string;
+  source_page?: string;
+  referrer?: string;
+  landing_url?: string;
+  browser_name?: string;
+  device_type?: string;
+}): Promise<MarketingLead> => {
+  const response = await apiClient.post('/public/marketing/leads', payload);
+  return response.data;
+};
+
+export const getMarketingOverview = async (): Promise<MarketingOverview> => {
+  const response = await apiClient.get('/marketing/overview');
+  return response.data;
+};
+
+export const getMarketingLeads = async (): Promise<MarketingLead[]> => {
+  const response = await apiClient.get('/marketing/leads');
+  return response.data;
+};
+
+export const updateMarketingLeadStatus = async (
+  leadId: string,
+  status: 'new' | 'contacted' | 'qualified' | 'closed',
+): Promise<MarketingLead> => {
+  const response = await apiClient.put(`/marketing/leads/${leadId}/status`, { status });
+  return response.data;
+};
+
+export const updateMarketingLead = async (
+  leadId: string,
+  payload: { status?: 'new' | 'contacted' | 'qualified' | 'closed'; notes?: string },
+): Promise<MarketingLead> => {
+  const response = await apiClient.put(`/marketing/leads/${leadId}`, payload);
+  return response.data;
+};
+
+export const convertMarketingLead = async (
+  leadId: string,
+  target_type: 'request' | 'profile',
+): Promise<MarketingLead> => {
+  const response = await apiClient.post(`/marketing/leads/${leadId}/convert`, { target_type });
+  return response.data;
+};
+
+export const getMarketingLandingPages = async (): Promise<MarketingLandingPageStat[]> => {
+  const response = await apiClient.get('/marketing/landing-pages');
+  return response.data;
+};
+
+export const getMarketingLandingPageDetails = async (propertyId: string): Promise<MarketingLandingPageDetails> => {
+  const response = await apiClient.get(`/marketing/landing-pages/${propertyId}/details`);
+  return response.data;
+};
+
+export const getMarketingAnalytics = async (): Promise<MarketingAnalytics> => {
+  const response = await apiClient.get('/marketing/analytics');
   return response.data;
 };
 
@@ -585,6 +782,8 @@ export const createClientRequest = async (data: {
   profile_id?: string;
   client_name?: string;
   phone_number?: string | null;
+  assigned_user_id?: string | null;
+  assigned_user_name?: string | null;
 }): Promise<ClientRequest> => {
   const response = await apiClient.post('/clients', data);
   return response.data;
@@ -600,6 +799,8 @@ export const updateClientRequest = async (
   payload: {
     client_name?: string;
     phone_number?: string | null;
+    assigned_user_id?: string | null;
+    assigned_user_name?: string | null;
     property_type?: string;
     city?: string;
     neighborhoods?: string[];
@@ -677,6 +878,8 @@ export interface ClientOffer {
   profile_id?: string | null;
   client_name: string;
   phone_number?: string | null;
+  assigned_user_id?: string | null;
+  assigned_user_name?: string | null;
   property_id: string;
   status: 'active' | 'archived' | 'new' | 'working' | 'closed';
   notes: string;
@@ -694,6 +897,8 @@ export const createClientOffer = async (payload: {
   phone_number?: string | null;
   property_id: string;
   follow_up_details?: string | null;
+  assigned_user_id?: string | null;
+  assigned_user_name?: string | null;
 }): Promise<ClientOffer> => {
   const response = await apiClient.post('/clients/offers', payload);
   return response.data;
@@ -727,6 +932,8 @@ export const updateClientOffer = async (
   payload: {
     client_name?: string;
     phone_number?: string | null;
+    assigned_user_id?: string | null;
+    assigned_user_name?: string | null;
     status?: 'active' | 'archived' | 'new' | 'working' | 'closed';
     notes?: string;
     reminder_type?: 'follow_up' | 'viewing' | null;
@@ -1008,10 +1215,63 @@ export interface Appointment {
   assigned_user_name?: string | null;
 }
 
+export interface NotificationItem {
+  id: string;
+  user_id: string;
+  owner_id?: string | null;
+  type: string;
+  category: string;
+  title: string;
+  message: string;
+  read: boolean;
+  priority: 'low' | 'normal' | 'high';
+  link?: string | null;
+  metadata?: Record<string, string>;
+  created_at: string;
+  read_at?: string | null;
+}
+
+export interface NotificationsResponse {
+  items: NotificationItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export const getAppointments = async (params?: {
   date_filter?: 'today' | 'this_week' | 'delayed';
   employee_id?: string;
 }): Promise<Appointment[]> => {
   const response = await apiClient.get('/appointments', { params });
   return response.data;
+};
+
+export const getNotifications = async (params?: {
+  unread_only?: boolean;
+  category?: string;
+  search?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<NotificationsResponse> => {
+  const response = await apiClient.get('/notifications', { params });
+  return response.data;
+};
+
+export const getUnreadNotificationsCount = async (): Promise<number> => {
+  const response = await apiClient.get('/notifications/unread-count');
+  return Number(response.data?.count || 0);
+};
+
+export const markNotificationRead = async (notificationId: string): Promise<NotificationItem> => {
+  const response = await apiClient.put(`/notifications/${notificationId}/read`);
+  return response.data;
+};
+
+export const markAllNotificationsRead = async (): Promise<number> => {
+  const response = await apiClient.put('/notifications/read-all');
+  return Number(response.data?.modified_count || 0);
+};
+
+export const deleteNotification = async (notificationId: string): Promise<void> => {
+  await apiClient.delete(`/notifications/${notificationId}`);
 };

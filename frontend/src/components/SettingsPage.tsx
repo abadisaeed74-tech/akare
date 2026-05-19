@@ -22,6 +22,7 @@ import {
   Row,
   Col,
   Statistic,
+  Tooltip,
 } from 'antd';
 import {
   UploadOutlined,
@@ -37,6 +38,7 @@ import {
   CrownOutlined,
   CheckCircleOutlined,
   ApartmentOutlined,
+  InfoCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
@@ -58,6 +60,7 @@ uploadFile,
   type PlanUsage,
   type CompanySettings,
   type TeamUser,
+  type EmployeePermissions,
 } from '../services/api';
 
 const { Sider, Content } = Layout;
@@ -123,6 +126,33 @@ const roleColor = (role?: TeamUser['role']) => {
   return 'blue';
 };
 
+const defaultEmployeePermissions: Required<EmployeePermissions> = {
+  can_add_property: true,
+  can_edit_property: true,
+  can_delete_property: false,
+  can_manage_files: true,
+  can_view_all_properties: false,
+  can_view_assigned_only: true,
+  can_manage_clients: true,
+  can_view_all_clients: false,
+  can_view_own_clients_only: true,
+  can_manage_appointments: true,
+  can_view_analytics: false,
+  can_export_data: false,
+  can_change_assignee: false,
+};
+
+const managerDefaultPermissions: Required<EmployeePermissions> = {
+  ...defaultEmployeePermissions,
+  can_delete_property: true,
+  can_view_all_properties: true,
+  can_view_all_clients: true,
+  can_view_own_clients_only: true,
+  can_view_analytics: true,
+  can_export_data: true,
+  can_change_assignee: true,
+};
+
 const PLANS: PlanInfo[] = [
   {
     key: 'starter',
@@ -153,7 +183,7 @@ const PLANS: PlanInfo[] = [
     max_properties: 999999,
     max_storage_mb: 102400,
     allow_custom_subdomain: true,
-    price_monthly_sar: 799,
+    price_monthly_sar: 599,
     description: 'للشركات والفرق الكبيرة',
     badge: 'للشركات',
   },
@@ -208,10 +238,17 @@ const [employeeForm] = Form.useForm<{
     can_edit_property: boolean;
     can_delete_property: boolean;
     can_manage_files: boolean;
+    can_view_all_properties: boolean;
+    can_view_assigned_only: boolean;
+    can_manage_clients: boolean;
+    can_view_all_clients: boolean;
+    can_view_own_clients_only: boolean;
+    can_manage_appointments: boolean;
+    can_view_analytics: boolean;
+    can_export_data: boolean;
+    can_change_assignee: boolean;
     status?: 'active' | 'disabled';
   }>();
-  const selectedEmployeeRole = Form.useWatch('role', employeeForm);
-  const isManagerRoleSelected = selectedEmployeeRole === 'manager';
 
   useEffect(() => {
     const init = async () => {
@@ -326,16 +363,22 @@ message.success('تم حفظ إعدادات الحساب بنجاح.');
   };
 
   const userColumns: ColumnsType<TeamUser> = [
-{
-      title: 'البريد الإلكتروني',
-      dataIndex: 'email',
-      key: 'email',
-    },
     {
-      title: 'الاسم',
-      dataIndex: 'display_name',
-      key: 'display_name',
-      render: (name: string | null | undefined) => name || '-',
+      title: 'الموظف',
+      key: 'employee',
+      render: (_, record) => {
+        const displayName = (record.display_name || '').trim() || record.email;
+        const initial = displayName.charAt(0).toUpperCase();
+        return (
+          <Space>
+            <Avatar style={{ background: '#3f7d3c' }}>{initial}</Avatar>
+            <Space direction="vertical" size={0}>
+              <Text strong>{displayName}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{record.email}</Text>
+            </Space>
+          </Space>
+        );
+      },
     },
     {
       title: 'الدور',
@@ -358,6 +401,41 @@ message.success('تم حفظ إعدادات الحساب بنجاح.');
       ),
     },
     {
+      title: 'الربط',
+      key: 'assignment',
+      render: (_, record) => (
+        <Space direction="vertical" size={2}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            العملاء: {record.assigned_clients_count ?? 0}
+          </Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            العقارات: {record.assigned_properties_count ?? 0}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'أهم الصلاحيات',
+      key: 'permission_badges',
+      render: (_, record) => {
+        const perms = record.permissions || {};
+        const badges: string[] = [];
+        if (perms.can_view_analytics) badges.push('تحليلات');
+        if (perms.can_export_data) badges.push('تصدير');
+        if (perms.can_change_assignee) badges.push('تغيير المسؤول');
+        if (perms.can_view_all_properties) badges.push('كل العقارات');
+        if (perms.can_view_all_clients) badges.push('كل العملاء');
+        if (!badges.length) badges.push('صلاحيات أساسية');
+        return (
+          <Space size={[4, 4]} wrap>
+            {badges.map((b) => (
+              <Tag key={b} color="blue">{b}</Tag>
+            ))}
+          </Space>
+        );
+      },
+    },
+    {
       title: 'إجراءات',
       key: 'actions',
       render: (_, record) => (
@@ -367,16 +445,25 @@ message.success('تم حفظ إعدادات الحساب بنجاح.');
             disabled={record.role === 'owner'}
             onClick={() => {
               setEditingEmployee(record);
-              const perms = record.permissions || {};
+              const perms = { ...defaultEmployeePermissions, ...(record.permissions || {}) };
 employeeForm.setFieldsValue({
                 email: record.email,
                 role: record.role === 'manager' ? 'manager' : 'employee',
                 display_name: record.display_name || '',
                 status: record.status,
-                can_add_property: record.role === 'manager' ? true : perms.can_add_property ?? true,
-                can_edit_property: record.role === 'manager' ? true : perms.can_edit_property ?? true,
-                can_delete_property: record.role === 'manager' ? true : perms.can_delete_property ?? false,
-                can_manage_files: record.role === 'manager' ? true : perms.can_manage_files ?? true,
+                can_add_property: perms.can_add_property,
+                can_edit_property: perms.can_edit_property,
+                can_delete_property: perms.can_delete_property,
+                can_manage_files: perms.can_manage_files,
+                can_view_all_properties: perms.can_view_all_properties,
+                can_view_assigned_only: perms.can_view_assigned_only,
+                can_manage_clients: perms.can_manage_clients,
+                can_view_all_clients: perms.can_view_all_clients,
+                can_view_own_clients_only: perms.can_view_own_clients_only,
+                can_manage_appointments: perms.can_manage_appointments,
+                can_view_analytics: perms.can_view_analytics,
+                can_export_data: perms.can_export_data,
+                can_change_assignee: perms.can_change_assignee,
               });
               setIsEmployeeModalVisible(true);
             }}
@@ -860,10 +947,7 @@ style={{
             employeeForm.resetFields();
             employeeForm.setFieldsValue({
               role: 'employee',
-              can_add_property: true,
-              can_edit_property: true,
-              can_delete_property: false,
-              can_manage_files: true,
+              ...defaultEmployeePermissions,
               status: 'active',
             });
             setIsEmployeeModalVisible(true);
@@ -893,10 +977,19 @@ style={{
             const values = await employeeForm.validateFields();
             const selectedRole = values.role || 'employee';
             const permissions = {
-              can_add_property: selectedRole === 'manager' ? true : values.can_add_property,
-              can_edit_property: selectedRole === 'manager' ? true : values.can_edit_property,
-              can_delete_property: selectedRole === 'manager' ? true : values.can_delete_property,
-              can_manage_files: selectedRole === 'manager' ? true : values.can_manage_files,
+              can_add_property: values.can_add_property,
+              can_edit_property: values.can_edit_property,
+              can_delete_property: values.can_delete_property,
+              can_manage_files: values.can_manage_files,
+              can_view_all_properties: values.can_view_all_properties,
+              can_view_assigned_only: values.can_view_assigned_only,
+              can_manage_clients: values.can_manage_clients,
+              can_view_all_clients: values.can_view_all_clients,
+              can_view_own_clients_only: values.can_view_own_clients_only,
+              can_manage_appointments: values.can_manage_appointments,
+              can_view_analytics: values.can_view_analytics,
+              can_export_data: values.can_export_data,
+              can_change_assignee: values.can_change_assignee,
             };
 
 if (editingEmployee) {
@@ -914,7 +1007,9 @@ if (editingEmployee) {
                         role: updated.role,
                         status: updated.status,
                         permissions: updated.permissions,
-                        display_name: updated.display_name,
+                        display_name: updated.display_name || updated.email,
+                        assigned_clients_count: updated.assigned_clients_count,
+                        assigned_properties_count: updated.assigned_properties_count,
                       }
                     : u,
                 ),
@@ -985,14 +1080,8 @@ if (editingEmployee) {
                 { value: 'manager', label: 'مدير' },
               ]}
               onChange={(value) => {
-                if (value === 'manager') {
-                  employeeForm.setFieldsValue({
-                    can_add_property: true,
-                    can_edit_property: true,
-                    can_delete_property: true,
-                    can_manage_files: true,
-                  });
-                }
+                const base = value === 'manager' ? managerDefaultPermissions : defaultEmployeePermissions;
+                employeeForm.setFieldsValue(base);
               }}
             />
           </Form.Item>
@@ -1005,37 +1094,73 @@ if (editingEmployee) {
           <Title level={5} style={{ marginTop: 8 }}>
             صلاحيات الموظف
           </Title>
-          {isManagerRoleSelected && (
-            <Text type="secondary">
-              المدير يملك جميع صلاحيات التشغيل تلقائيا، ولا يمكنه الدخول إلى الإعدادات أو الفوترة.
-            </Text>
-          )}
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text>إضافة عقار</Text>
-              <Form.Item name="can_add_property" noStyle valuePropName="checked">
-                <Switch disabled={isManagerRoleSelected} />
-              </Form.Item>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text>تعديل العقارات</Text>
-              <Form.Item name="can_edit_property" noStyle valuePropName="checked">
-                <Switch disabled={isManagerRoleSelected} />
-              </Form.Item>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text>حذف العقارات</Text>
-              <Form.Item name="can_delete_property" noStyle valuePropName="checked">
-                <Switch disabled={isManagerRoleSelected} />
-              </Form.Item>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text>إدارة الملفات (رفع / حذف المرفقات)</Text>
-              <Form.Item name="can_manage_files" noStyle valuePropName="checked">
-                <Switch disabled={isManagerRoleSelected} />
-              </Form.Item>
-            </div>
-          </Space>
+          <Text type="secondary">
+            المدير يحصل افتراضيًا على صلاحيات تشغيلية كاملة، ويمكن للمالك تخصيصها. إعدادات الخطة والفوترة تبقى للمالك فقط.
+          </Text>
+          <div style={{ marginTop: 12, border: '1px solid #e4e7df', borderRadius: 12, padding: 12 }}>
+            <Title level={5}>العقارات</Title>
+            <Space direction="vertical" style={{ width: '100%' }}>
+              {[
+                ['can_add_property', 'إضافة العقارات', 'السماح بإضافة عروض جديدة.'],
+                ['can_edit_property', 'تعديل العقارات', 'السماح بتعديل بيانات العقارات.'],
+                ['can_delete_property', 'حذف العقارات', 'السماح بحذف العقارات نهائيًا.'],
+                ['can_manage_files', 'إدارة الملفات', 'رفع/تعديل المرفقات والصور.'],
+                ['can_view_all_properties', 'مشاهدة جميع العقارات', 'مشاهدة كل عقارات المكتب.'],
+                ['can_view_assigned_only', 'مشاهدة العقارات المرتبطة فقط', 'المشاهدة على العقارات المسندة/المضافة من الموظف.'],
+              ].map(([key, label, help]) => (
+                <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Space>
+                    <Text>{label}</Text>
+                    <Tooltip title={help}><InfoCircleOutlined style={{ color: '#6d7d72' }} /></Tooltip>
+                  </Space>
+                  <Form.Item name={key} noStyle valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </div>
+              ))}
+            </Space>
+          </div>
+          <div style={{ marginTop: 12, border: '1px solid #e4e7df', borderRadius: 12, padding: 12 }}>
+            <Title level={5}>العملاء والمواعيد</Title>
+            <Space direction="vertical" style={{ width: '100%' }}>
+              {[
+                ['can_manage_clients', 'إدارة العملاء', 'إضافة/تعديل/إدارة ملفات العملاء والطلبات والعروض.'],
+                ['can_view_all_clients', 'مشاهدة جميع العملاء', 'الوصول لكل عملاء المكتب.'],
+                ['can_view_own_clients_only', 'مشاهدة العملاء المرتبطين فقط', 'الوصول لعملائه المسندين فقط.'],
+                ['can_change_assignee', 'تغيير الموظف المسؤول', 'تعديل الموظف المرتبط بالعميل.'],
+                ['can_manage_appointments', 'إدارة المواعيد', 'الوصول لإدارة المتابعات والمواعيد.'],
+              ].map(([key, label, help]) => (
+                <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Space>
+                    <Text>{label}</Text>
+                    <Tooltip title={help}><InfoCircleOutlined style={{ color: '#6d7d72' }} /></Tooltip>
+                  </Space>
+                  <Form.Item name={key} noStyle valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </div>
+              ))}
+            </Space>
+          </div>
+          <div style={{ marginTop: 12, border: '1px solid #e4e7df', borderRadius: 12, padding: 12 }}>
+            <Title level={5}>التحليلات والتقارير</Title>
+            <Space direction="vertical" style={{ width: '100%' }}>
+              {[
+                ['can_view_analytics', 'مشاهدة التحليلات', 'الوصول إلى لوحات الإحصاءات والتحليلات.'],
+                ['can_export_data', 'تصدير البيانات', 'تصدير بيانات العملاء/العقارات عند توفر التصدير.'],
+              ].map(([key, label, help]) => (
+                <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Space>
+                    <Text>{label}</Text>
+                    <Tooltip title={help}><InfoCircleOutlined style={{ color: '#6d7d72' }} /></Tooltip>
+                  </Space>
+                  <Form.Item name={key} noStyle valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </div>
+              ))}
+            </Space>
+          </div>
         </Form>
       </Modal>
     </Card>

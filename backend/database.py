@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+from collections import defaultdict
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -10,6 +11,11 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import ReturnDocument
 from models import Property, UserPublic
+from utils.permissions import (
+    DEFAULT_EMPLOYEE_PERMISSIONS,
+    MANAGER_DEFAULT_PERMISSIONS,
+    normalize_permissions,
+)
 
 load_dotenv()
 
@@ -28,6 +34,9 @@ client_request_notes_collection = database.get_collection("client_request_notes"
 client_offer_collection = database.get_collection("client_offers")
 notification_queue_collection = database.get_collection("notification_queue")
 client_profile_collection = database.get_collection("client_profiles")
+marketing_lead_collection = database.get_collection("marketing_leads")
+marketing_event_collection = database.get_collection("marketing_events")
+notification_collection = database.get_collection("notifications")
 PROPERTY_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 # Helper to convert document from DB
@@ -120,9 +129,16 @@ def property_helper(property) -> dict:
         "documents": _normalize_media_list(property.get("documents", [])),
         "map_url": property.get("map_url"),
         "view_count": int(property.get("view_count", 0) or 0),
+        "landing_form_enabled": bool(property.get("landing_form_enabled", True)),
+        "landing_primary_cta": property.get("landing_primary_cta", "whatsapp"),
     }
 
-async def add_property(property_data: Property, owner_id: str) -> dict:
+async def add_property(
+    property_data: Property,
+    owner_id: str,
+    *,
+    created_by_user_id: Optional[str] = None,
+) -> dict:
     """
     Add a new property to the database.
     """
@@ -130,6 +146,8 @@ async def add_property(property_data: Property, owner_id: str) -> dict:
     # can generate a proper ObjectId automatically.
     property_dict = property_data.model_dump(by_alias=True, exclude_none=True)
     property_dict["owner_id"] = owner_id
+    if created_by_user_id:
+        property_dict["created_by_user_id"] = created_by_user_id
     if not property_dict.get("property_code"):
         property_dict["property_code"] = await _generate_unique_property_code()
     property_dict.setdefault("view_count", 0)
@@ -331,6 +349,14 @@ async def count_owner_inquiries_db(owner_id: str) -> int:
     return await inquiry_collection.count_documents({"owner_id": owner_id})
 
 
+async def count_owner_client_requests_db(owner_id: str) -> int:
+    return await client_request_collection.count_documents({"owner_id": owner_id})
+
+
+async def count_owner_client_offers_db(owner_id: str) -> int:
+    return await client_offer_collection.count_documents({"owner_id": owner_id})
+
+
 async def count_owner_total_views_db(owner_id: str) -> int:
     pipeline = [
         {"$match": {"owner_id": owner_id}},
@@ -367,6 +393,9 @@ def user_helper(user) -> dict:
     _id = user.get("_id")
     role = user.get("role") or "owner"
     status = user.get("status") or "active"
+    permissions = user.get("permissions") or {}
+    if role in {"employee", "manager"}:
+        permissions = normalize_permissions(role, permissions)
     return {
         "id": str(_id) if _id is not None else None,
         "email": user.get("email"),
@@ -375,7 +404,7 @@ def user_helper(user) -> dict:
         "status": status,
         "company_owner_id": user.get("company_owner_id") or (str(_id) if _id is not None else None),
         "display_name": user.get("display_name"),
-        "permissions": user.get("permissions") or {},
+        "permissions": permissions,
     }
 
 
@@ -480,6 +509,28 @@ async def get_team_for_owner(owner_user_id: str) -> List[dict]:
     return team
 
 
+async def count_assigned_clients_for_user(owner_user_id: str, user_id: str) -> int:
+    assigned_requests = await client_request_collection.count_documents(
+        {"owner_id": owner_user_id, "assigned_user_id": user_id}
+    )
+    assigned_offers = await client_offer_collection.count_documents(
+        {"owner_id": owner_user_id, "assigned_user_id": user_id}
+    )
+    return int(assigned_requests + assigned_offers)
+
+
+async def count_assigned_properties_for_user(owner_user_id: str, user_id: str) -> int:
+    return await property_collection.count_documents(
+        {
+            "owner_id": owner_user_id,
+            "$or": [
+                {"assigned_user_id": user_id},
+                {"created_by_user_id": user_id},
+            ],
+        }
+    )
+
+
 async def update_employee_user(owner_user_id: str, user_id: str, updates: Dict[str, Any]) -> Optional[dict]:
     """
     Update an employee that belongs to a given owner (company). Owners cannot
@@ -495,6 +546,22 @@ async def update_employee_user(owner_user_id: str, user_id: str, updates: Dict[s
     if not update_doc:
         user = await user_collection.find_one({"_id": oid})
         return user_helper(user) if user else None
+
+    current = await user_collection.find_one(
+        {
+            "_id": oid,
+            "company_owner_id": owner_user_id,
+            "role": {"$ne": "owner"},
+        }
+    )
+    if not current:
+        return None
+
+    target_role = str(update_doc.get("role") or current.get("role") or "employee")
+    if "permissions" in update_doc:
+        update_doc["permissions"] = normalize_permissions(target_role, update_doc.get("permissions") or {})
+    elif "role" in update_doc and target_role in {"employee", "manager"}:
+        update_doc["permissions"] = normalize_permissions(target_role, current.get("permissions") or {})
 
     updated = await user_collection.find_one_and_update(
         {
@@ -519,20 +586,9 @@ async def create_employee_user(
     """
     Create a new employee user under the given owner.
     """
-    default_permissions = {
-        "can_add_property": True,
-        "can_edit_property": True,
-        "can_delete_property": False,
-        "can_manage_files": True,
-    }
-    manager_permissions = {
-        "can_add_property": True,
-        "can_edit_property": True,
-        "can_delete_property": True,
-        "can_manage_files": True,
-    }
     user_role = role if role in {"manager", "employee"} else "employee"
-    perms = manager_permissions if user_role == "manager" else (permissions or default_permissions)
+    defaults = MANAGER_DEFAULT_PERMISSIONS if user_role == "manager" else DEFAULT_EMPLOYEE_PERMISSIONS
+    perms = normalize_permissions(user_role, permissions or defaults)
     user_doc = {
         "email": email,
         "password_hash": password_hash,
@@ -979,14 +1035,45 @@ async def get_platform_office_detail_db(owner_user_id: str, properties_limit: in
     }
 
 
+async def delete_platform_office_data_db(owner_user_id: str) -> Dict[str, int]:
+    """
+    Permanently delete office/company data for a specific owner.
+    """
+    deleted: Dict[str, int] = {}
+    deleted["properties"] = int((await property_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["property_inquiries"] = int((await inquiry_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["client_requests"] = int((await client_request_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["client_request_notes"] = int((await client_request_notes_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["client_offers"] = int((await client_offer_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["client_offer_notes"] = int((await client_offer_note_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["client_profiles"] = int((await client_profile_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["appointments"] = int((await appointment_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["marketing_leads"] = int((await marketing_lead_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["marketing_events"] = int((await marketing_event_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["notifications"] = int((await notification_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["notification_queue"] = int((await notification_queue_collection.delete_many({"owner_id": owner_user_id})).deleted_count)
+    deleted["companies"] = int((await company_collection.delete_many({"owner_user_id": owner_user_id})).deleted_count)
+    deleted["team_users"] = int((await user_collection.delete_many({"company_owner_id": owner_user_id})).deleted_count)
+    try:
+        owner_oid = ObjectId(owner_user_id)
+        deleted["owner_user"] = int((await user_collection.delete_one({"_id": owner_oid})).deleted_count)
+    except Exception:
+        deleted["owner_user"] = 0
+    return deleted
+
+
 def client_request_helper(item: Dict[str, Any]) -> Dict[str, Any]:
     _id = item.get("_id")
     return {
         "id": str(_id) if _id is not None else "",
         "owner_id": item.get("owner_id", ""),
+        "profile_id": item.get("profile_id") or item.get("client_profile_id"),
         "raw_text": item.get("raw_text", ""),
         "client_name": item.get("client_name", "غير محدد"),
         "phone_number": item.get("phone_number"),
+        "assigned_user_id": item.get("assigned_user_id"),
+        "assigned_user_name": item.get("assigned_user_name"),
+        "_assignment_bound": ("assigned_user_id" in item) or ("assigned_user_name" in item),
         "property_type": item.get("property_type", "غير محدد"),
         "city": item.get("city", "غير محدد"),
         "neighborhoods": item.get("neighborhoods", []) or [],
@@ -1001,6 +1088,8 @@ def client_request_helper(item: Dict[str, Any]) -> Dict[str, Any]:
         "reminder_before_minutes": int(item.get("reminder_before_minutes", 120) or 120),
         "reminder_sent_at": item.get("reminder_sent_at"),
         "follow_up_details": item.get("follow_up_details"),
+        "lead_source": item.get("lead_source"),
+        "related_property_id": item.get("related_property_id"),
         "status": item.get("status", "new"),
         "created_at": item.get("created_at") or datetime.utcnow(),
         "updated_at": item.get("updated_at") or datetime.utcnow(),
@@ -1011,9 +1100,12 @@ async def create_client_request_db(owner_id: str, payload: Dict[str, Any]) -> Di
     now = datetime.utcnow()
     doc = {
         "owner_id": owner_id,
+        "profile_id": payload.get("profile_id"),
         "raw_text": payload.get("raw_text", ""),
         "client_name": payload.get("client_name", "غير محدد"),
         "phone_number": payload.get("phone_number"),
+        "assigned_user_id": payload.get("assigned_user_id"),
+        "assigned_user_name": payload.get("assigned_user_name"),
         "property_type": payload.get("property_type", "غير محدد"),
         "city": payload.get("city", "غير محدد"),
         "neighborhoods": payload.get("neighborhoods", []) or [],
@@ -1028,6 +1120,8 @@ async def create_client_request_db(owner_id: str, payload: Dict[str, Any]) -> Di
         "reminder_before_minutes": int(payload.get("reminder_before_minutes", 120) or 120),
         "reminder_sent_at": payload.get("reminder_sent_at"),
         "follow_up_details": payload.get("follow_up_details"),
+        "lead_source": payload.get("lead_source"),
+        "related_property_id": payload.get("related_property_id"),
         "status": payload.get("status", "new"),
         "created_at": now,
         "updated_at": now,
@@ -1208,6 +1302,9 @@ def client_offer_helper(item: Dict[str, Any]) -> Dict[str, Any]:
         "profile_id": item.get("profile_id") or item.get("client_profile_id"),
         "client_name": item.get("client_name", "غير محدد"),
         "phone_number": item.get("phone_number"),
+        "assigned_user_id": item.get("assigned_user_id"),
+        "assigned_user_name": item.get("assigned_user_name"),
+        "_assignment_bound": ("assigned_user_id" in item) or ("assigned_user_name" in item),
         "property_id": item.get("property_id", ""),
         "status": item.get("status", "active"),
         "notes": item.get("notes", ""),
@@ -1226,6 +1323,8 @@ async def create_client_offer_db(owner_id: str, payload: Dict[str, Any]) -> Dict
         "profile_id": payload.get("profile_id"),
         "client_name": payload.get("client_name", "غير محدد"),
         "phone_number": payload.get("phone_number"),
+        "assigned_user_id": payload.get("assigned_user_id"),
+        "assigned_user_name": payload.get("assigned_user_name"),
         "property_id": payload.get("property_id", ""),
         "status": payload.get("status", "new"),  # Default to "new" for new offers
         "notes": payload.get("notes", ""),
@@ -1246,6 +1345,18 @@ async def get_client_offers_db(owner_id: str, limit: int = 200) -> List[Dict[str
     async for row in client_offer_collection.find({"owner_id": owner_id}).sort("_id", -1).limit(limit):
         items.append(client_offer_helper(row))
     return items
+
+
+async def get_assigned_offer_property_ids(owner_id: str, user_id: str) -> List[str]:
+    rows = await client_offer_collection.distinct(
+        "property_id",
+        {
+            "owner_id": owner_id,
+            "assigned_user_id": user_id,
+            "property_id": {"$exists": True, "$ne": None, "$ne": ""},
+        },
+    )
+    return [str(v).strip() for v in rows if str(v).strip()]
 
 
 async def get_client_offers_by_client_db(
@@ -2011,3 +2122,529 @@ async def delete_appointment_db(owner_id: str, appointment_id: str) -> bool:
         return False
     result = await appointment_collection.delete_one({"_id": oid, "owner_id": owner_id})
     return result.deleted_count == 1
+
+
+def marketing_lead_helper(item: Dict[str, Any]) -> Dict[str, Any]:
+    _id = item.get("_id")
+    return {
+        "id": str(_id) if _id is not None else "",
+        "owner_id": item.get("owner_id", ""),
+        "property_id": item.get("property_id", ""),
+        "name": item.get("name", ""),
+        "phone": item.get("phone", ""),
+        "notes": item.get("notes"),
+        "request_type": item.get("request_type", "general"),
+        "ad_source": item.get("ad_source", "direct"),
+        "source_page": item.get("source_page", "landing_page"),
+        "status": item.get("status", "new"),
+        "visit_count": int(item.get("visit_count", 0) or 0),
+        "clicked_whatsapp": bool(item.get("clicked_whatsapp", False)),
+        "viewed_video": bool(item.get("viewed_video", False)),
+        "watched_video": bool(item.get("watched_video", False)),
+        "completed_video": bool(item.get("completed_video", False)),
+        "submitted_form": bool(item.get("submitted_form", True)),
+        "session_id": item.get("session_id"),
+        "session_started_at": item.get("session_started_at"),
+        "session_last_activity_at": item.get("session_last_activity_at"),
+        "session_duration_seconds": int(item.get("session_duration_seconds", 0) or 0),
+        "referrer": item.get("referrer"),
+        "landing_url": item.get("landing_url"),
+        "browser_name": item.get("browser_name"),
+        "device_type": item.get("device_type"),
+        "converted_to_client": bool(item.get("converted_to_client", False)),
+        "converted_client_type": item.get("converted_client_type"),
+        "converted_client_id": item.get("converted_client_id"),
+        "created_at": item.get("created_at") or datetime.utcnow(),
+        "updated_at": item.get("updated_at") or datetime.utcnow(),
+    }
+
+
+async def create_marketing_lead_db(owner_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    now = datetime.utcnow()
+    doc = {
+        "owner_id": owner_id,
+        "property_id": payload.get("property_id", ""),
+        "name": payload.get("name", ""),
+        "phone": payload.get("phone", ""),
+        "notes": payload.get("notes"),
+        "request_type": payload.get("request_type", "general"),
+        "ad_source": payload.get("ad_source", "direct"),
+        "source_page": payload.get("source_page", "landing_page"),
+        "status": "new",
+        "visit_count": int(payload.get("visit_count", 0) or 0),
+        "clicked_whatsapp": bool(payload.get("clicked_whatsapp", False)),
+        "viewed_video": bool(payload.get("viewed_video", False)),
+        "watched_video": bool(payload.get("watched_video", False)),
+        "completed_video": bool(payload.get("completed_video", False)),
+        "submitted_form": bool(payload.get("submitted_form", True)),
+        "session_id": payload.get("session_id"),
+        "session_started_at": payload.get("session_started_at"),
+        "session_last_activity_at": payload.get("session_last_activity_at"),
+        "session_duration_seconds": int(payload.get("session_duration_seconds", 0) or 0),
+        "referrer": payload.get("referrer"),
+        "landing_url": payload.get("landing_url"),
+        "browser_name": payload.get("browser_name"),
+        "device_type": payload.get("device_type"),
+        "converted_to_client": False,
+        "converted_client_type": None,
+        "converted_client_id": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    result = await marketing_lead_collection.insert_one(doc)
+    saved = await marketing_lead_collection.find_one({"_id": result.inserted_id})
+    return marketing_lead_helper(saved or doc)
+
+
+async def get_marketing_leads_db(owner_id: str, limit: int = 500) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    async for row in marketing_lead_collection.find({"owner_id": owner_id}).sort("_id", -1).limit(limit):
+        rows.append(marketing_lead_helper(row))
+    return rows
+
+
+async def get_marketing_lead_by_id_db(owner_id: str, lead_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        oid = ObjectId(lead_id)
+    except InvalidId:
+        return None
+    found = await marketing_lead_collection.find_one({"_id": oid, "owner_id": owner_id})
+    return marketing_lead_helper(found) if found else None
+
+
+async def update_marketing_lead_db(owner_id: str, lead_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    try:
+        oid = ObjectId(lead_id)
+    except InvalidId:
+        return None
+    if not updates:
+        found = await marketing_lead_collection.find_one({"_id": oid, "owner_id": owner_id})
+        return marketing_lead_helper(found) if found else None
+    updates["updated_at"] = datetime.utcnow()
+    updated = await marketing_lead_collection.find_one_and_update(
+        {"_id": oid, "owner_id": owner_id},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    return marketing_lead_helper(updated) if updated else None
+
+
+async def create_marketing_event_db(owner_id: str, payload: Dict[str, Any]) -> None:
+    doc = {
+        "owner_id": owner_id,
+        "property_id": payload.get("property_id", ""),
+        "event_type": payload.get("event_type", "landing_visit"),
+        "ad_source": payload.get("ad_source", "direct"),
+        "session_id": payload.get("session_id"),
+        "metadata": payload.get("metadata") or {},
+        "created_at": datetime.utcnow(),
+    }
+    await marketing_event_collection.insert_one(doc)
+
+
+async def get_marketing_session_signals_db(
+    owner_id: str,
+    property_id: str,
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    base_query: Dict[str, Any] = {"owner_id": owner_id, "property_id": property_id}
+    if session_id:
+        base_query["session_id"] = session_id
+
+    visit_count = await marketing_event_collection.count_documents({
+        **base_query,
+        "event_type": "landing_visit",
+    })
+    clicked_whatsapp = (
+        await marketing_event_collection.count_documents({
+            **base_query,
+            "event_type": "cta_whatsapp_click",
+        })
+    ) > 0
+    watched_video_complete = (
+        await marketing_event_collection.count_documents({
+            **base_query,
+            "event_type": "video_complete",
+        })
+    ) > 0
+    viewed_video = (
+        await marketing_event_collection.count_documents({
+            **base_query,
+            "event_type": "video_view",
+        })
+    ) > 0
+
+    first_event = await marketing_event_collection.find_one(
+        base_query,
+        sort=[("created_at", 1)],
+    )
+    last_event = await marketing_event_collection.find_one(
+        base_query,
+        sort=[("created_at", -1)],
+    )
+
+    duration_from_end = 0
+    session_end_event = await marketing_event_collection.find_one(
+        {
+            **base_query,
+            "event_type": "session_end",
+        },
+        sort=[("created_at", -1)],
+    )
+    if session_end_event:
+        metadata = session_end_event.get("metadata") or {}
+        try:
+            duration_from_end = int(float(metadata.get("duration_seconds", 0) or 0))
+        except Exception:
+            duration_from_end = 0
+
+    started_at = first_event.get("created_at") if first_event else None
+    last_activity_at = last_event.get("created_at") if last_event else None
+    fallback_duration = 0
+    if started_at and last_activity_at:
+        try:
+            fallback_duration = max(0, int((last_activity_at - started_at).total_seconds()))
+        except Exception:
+            fallback_duration = 0
+
+    metadata_source = (last_event or first_event or {}).get("metadata") or {}
+    browser_name = metadata_source.get("browser")
+    device_type = metadata_source.get("device")
+    referrer = metadata_source.get("referrer")
+    landing_url = metadata_source.get("landing_url")
+    return {
+        "visit_count": int(visit_count),
+        "clicked_whatsapp": bool(clicked_whatsapp),
+        "viewed_video": bool(viewed_video),
+        "watched_video": bool(watched_video_complete),
+        "completed_video": bool(watched_video_complete),
+        "session_started_at": started_at,
+        "session_last_activity_at": last_activity_at,
+        "session_duration_seconds": max(duration_from_end, fallback_duration),
+        "browser_name": browser_name,
+        "device_type": device_type,
+        "referrer": referrer,
+        "landing_url": landing_url,
+    }
+
+
+def normalize_marketing_source(source: Optional[str], referrer: Optional[str] = None) -> str:
+    value = (source or "").strip().lower()
+    if not value and referrer:
+        try:
+            value = urlparse(referrer).hostname or ""
+        except Exception:
+            value = referrer
+        value = value.strip().lower()
+
+    if "tiktok" in value:
+        return "tiktok"
+    if "snap" in value:
+        return "snapchat"
+    if "insta" in value:
+        return "instagram"
+    if "youtu" in value:
+        return "youtube"
+    if "google" in value:
+        return "google"
+    if value in {"direct", "none", "(none)", "(direct)"}:
+        return "direct"
+    if not value:
+        return "direct"
+    return "unknown"
+
+
+async def get_marketing_overview_db(owner_id: str) -> Dict[str, Any]:
+    now = datetime.utcnow()
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    leads_today = await marketing_lead_collection.count_documents({"owner_id": owner_id, "created_at": {"$gte": day_start}})
+    leads_month = await marketing_lead_collection.count_documents({"owner_id": owner_id, "created_at": {"$gte": month_start}})
+    visits_count = await marketing_event_collection.count_documents({"owner_id": owner_id, "event_type": "landing_visit"})
+    unique_visitors = len(
+        await marketing_event_collection.distinct(
+            "session_id",
+            {"owner_id": owner_id, "event_type": "landing_visit", "session_id": {"$ne": None}},
+        )
+    )
+    clicks_count = await marketing_event_collection.count_documents({
+        "owner_id": owner_id,
+        "event_type": {"$in": ["cta_whatsapp_click", "cta_call_click"]},
+    })
+    converted_count = await marketing_lead_collection.count_documents({"owner_id": owner_id, "converted_to_client": True})
+    avg_session_duration_raw = await marketing_lead_collection.aggregate([
+        {"$match": {"owner_id": owner_id}},
+        {"$group": {"_id": None, "avg_duration": {"$avg": {"$ifNull": ["$session_duration_seconds", 0]}}}},
+    ]).to_list(length=1)
+    average_session_duration_seconds = int((avg_session_duration_raw[0].get("avg_duration", 0) if avg_session_duration_raw else 0) or 0)
+
+    source_breakdown: Dict[str, int] = defaultdict(int)
+    async for row in marketing_lead_collection.find({"owner_id": owner_id}, {"ad_source": 1}):
+        source = normalize_marketing_source(str(row.get("ad_source") or ""))
+        source_breakdown[source] += 1
+    top_source = max(source_breakdown, key=source_breakdown.get) if source_breakdown else "direct"
+
+    top_properties_map: Dict[str, int] = defaultdict(int)
+    async for row in marketing_lead_collection.find({"owner_id": owner_id}, {"property_id": 1}):
+        pid = str(row.get("property_id") or "")
+        if pid:
+            top_properties_map[pid] += 1
+    top_properties = [
+        {"property_id": pid, "leads": count}
+        for pid, count in sorted(top_properties_map.items(), key=lambda item: item[1], reverse=True)[:5]
+    ]
+
+    conversion_rate = (converted_count / leads_month * 100) if leads_month else 0.0
+    return {
+        "leads_today": leads_today,
+        "leads_month": leads_month,
+        "conversion_rate": round(conversion_rate, 2),
+        "clicks_count": clicks_count,
+        "visits_count": visits_count,
+        "unique_visitors_count": unique_visitors,
+        "average_session_duration_seconds": average_session_duration_seconds,
+        "top_source": top_source,
+        "source_breakdown": dict(source_breakdown),
+        "top_properties": top_properties,
+    }
+
+
+async def get_marketing_landing_pages_db(owner_id: str) -> List[Dict[str, Any]]:
+    visits_map: Dict[str, int] = defaultdict(int)
+    unique_sessions_per_property: Dict[str, set] = defaultdict(set)
+    source_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    async for ev in marketing_event_collection.find({"owner_id": owner_id, "event_type": "landing_visit"}, {"property_id": 1, "ad_source": 1}):
+        pid = str(ev.get("property_id") or "")
+        if not pid:
+            continue
+        visits_map[pid] += 1
+        session_id = ev.get("session_id")
+        if session_id:
+            unique_sessions_per_property[pid].add(str(session_id))
+        source = normalize_marketing_source(str(ev.get("ad_source") or ""))
+        source_map[pid][source] += 1
+
+    leads_map: Dict[str, int] = defaultdict(int)
+    async for lead in marketing_lead_collection.find({"owner_id": owner_id}, {"property_id": 1}):
+        pid = str(lead.get("property_id") or "")
+        if pid:
+            leads_map[pid] += 1
+
+    property_ids = set(visits_map.keys()) | set(leads_map.keys())
+    stats: List[Dict[str, Any]] = []
+    for pid in property_ids:
+        visits = visits_map.get(pid, 0)
+        leads = leads_map.get(pid, 0)
+        top_source = "direct"
+        if source_map.get(pid):
+            top_source = max(source_map[pid], key=source_map[pid].get)
+        stats.append({
+            "property_id": pid,
+            "leads_count": leads,
+            "visits_count": visits,
+            "unique_visitors_count": len(unique_sessions_per_property.get(pid, set())),
+            "conversion_rate": round((leads / visits * 100), 2) if visits else 0.0,
+            "top_source": top_source,
+        })
+    stats.sort(key=lambda x: x.get("leads_count", 0), reverse=True)
+    return stats
+
+
+async def get_marketing_landing_page_details_db(owner_id: str, property_id: str) -> Dict[str, Any]:
+    base_query = {"owner_id": owner_id, "property_id": property_id}
+
+    visits_count = await marketing_event_collection.count_documents({**base_query, "event_type": "landing_visit"})
+    unique_visitors_count = len(
+        await marketing_event_collection.distinct(
+            "session_id",
+            {**base_query, "event_type": "landing_visit", "session_id": {"$ne": None}},
+        )
+    )
+    leads_count = await marketing_lead_collection.count_documents(base_query)
+    conversion_rate = round((leads_count / visits_count * 100), 2) if visits_count else 0.0
+
+    source_visits: Dict[str, int] = defaultdict(int)
+    source_clicks: Dict[str, int] = defaultdict(int)
+    source_leads: Dict[str, int] = defaultdict(int)
+
+    async for ev in marketing_event_collection.find(
+        {**base_query, "event_type": "landing_visit"},
+        {"ad_source": 1, "metadata": 1},
+    ):
+        metadata = ev.get("metadata") or {}
+        source_key = normalize_marketing_source(
+            str(ev.get("ad_source") or metadata.get("source") or ""),
+            metadata.get("referrer"),
+        )
+        source_visits[source_key] += 1
+
+    async for ev in marketing_event_collection.find(
+        {**base_query, "event_type": {"$in": ["cta_whatsapp_click", "cta_call_click", "cta_primary_click"]}},
+        {"ad_source": 1, "metadata": 1},
+    ):
+        metadata = ev.get("metadata") or {}
+        source_key = normalize_marketing_source(
+            str(ev.get("ad_source") or metadata.get("source") or ""),
+            metadata.get("referrer"),
+        )
+        source_clicks[source_key] += 1
+
+    async for lead in marketing_lead_collection.find(
+        base_query,
+        {"ad_source": 1, "referrer": 1},
+    ):
+        source_key = normalize_marketing_source(
+            str(lead.get("ad_source") or ""),
+            str(lead.get("referrer") or ""),
+        )
+        source_leads[source_key] += 1
+
+    source_order = ["tiktok", "snapchat", "instagram", "youtube", "google", "direct", "unknown"]
+    observed_sources = set(source_visits.keys()) | set(source_clicks.keys()) | set(source_leads.keys())
+    traffic_sources: List[Dict[str, Any]] = []
+    for source_key in source_order + sorted([s for s in observed_sources if s not in source_order]):
+        if source_key not in observed_sources:
+            continue
+        visits = int(source_visits.get(source_key, 0))
+        leads = int(source_leads.get(source_key, 0))
+        traffic_sources.append({
+            "source": source_key,
+            "visits": visits,
+            "clicks": int(source_clicks.get(source_key, 0)),
+            "leads": leads,
+            "conversion_rate": round((leads / visits * 100), 2) if visits else 0.0,
+        })
+
+    cta_breakdown = {
+        "whatsapp_clicks": await marketing_event_collection.count_documents({**base_query, "event_type": "cta_whatsapp_click"}),
+        "call_clicks": await marketing_event_collection.count_documents({**base_query, "event_type": "cta_call_click"}),
+        "video_views": await marketing_event_collection.count_documents({**base_query, "event_type": "video_view"}),
+        "form_views": await marketing_event_collection.count_documents({**base_query, "event_type": "form_view"}),
+        "form_submits": await marketing_event_collection.count_documents({**base_query, "event_type": "form_submit"}),
+    }
+
+    funnel = [
+        {"label": "زيارات", "value": int(visits_count)},
+        {"label": "ضغط واتساب", "value": int(cta_breakdown["whatsapp_clicks"])},
+        {"label": "فتح الفورم", "value": int(cta_breakdown["form_views"])},
+        {"label": "Leads", "value": int(leads_count)},
+    ]
+
+    raw_events = await marketing_event_collection.find(
+        base_query,
+        {"session_id": 1, "event_type": 1, "created_at": 1, "ad_source": 1, "metadata": 1},
+    ).sort("created_at", -1).limit(1200).to_list(length=1200)
+
+    sessions: Dict[str, Dict[str, Any]] = {}
+    for index, ev in enumerate(raw_events):
+        event_type = str(ev.get("event_type") or "landing_visit")
+        created_at = ev.get("created_at") or datetime.utcnow()
+        metadata = ev.get("metadata") or {}
+        raw_session_id = ev.get("session_id")
+        session_key = str(raw_session_id) if raw_session_id else f"anon-{index}"
+        source_key = normalize_marketing_source(
+            str(ev.get("ad_source") or metadata.get("source") or ""),
+            metadata.get("referrer"),
+        )
+
+        if session_key not in sessions:
+            sessions[session_key] = {
+                "first_at": created_at,
+                "last_at": created_at,
+                "last_event_type": event_type,
+                "source": source_key,
+                "device": str(metadata.get("device") or "unknown"),
+                "duration_seconds": 0,
+            }
+        else:
+            sessions[session_key]["first_at"] = min(sessions[session_key]["first_at"], created_at)
+            sessions[session_key]["last_at"] = max(sessions[session_key]["last_at"], created_at)
+
+        if created_at >= sessions[session_key]["last_at"]:
+            sessions[session_key]["last_event_type"] = event_type
+            sessions[session_key]["source"] = source_key
+            sessions[session_key]["device"] = str(metadata.get("device") or sessions[session_key]["device"] or "unknown")
+
+        if event_type == "session_end":
+            try:
+                sessions[session_key]["duration_seconds"] = max(
+                    int(float(metadata.get("duration_seconds", 0) or 0)),
+                    int(sessions[session_key]["duration_seconds"] or 0),
+                )
+            except Exception:
+                pass
+
+    session_activity: List[Dict[str, Any]] = []
+    durations: List[int] = []
+    for data in sessions.values():
+        fallback_duration = max(0, int((data["last_at"] - data["first_at"]).total_seconds()))
+        duration_seconds = max(int(data.get("duration_seconds", 0) or 0), fallback_duration)
+        if duration_seconds > 0:
+            durations.append(duration_seconds)
+        session_activity.append({
+            "source": data.get("source", "unknown"),
+            "activity": data.get("last_event_type", "landing_visit"),
+            "session_duration_seconds": duration_seconds,
+            "happened_at": data.get("last_at") or datetime.utcnow(),
+            "device_type": data.get("device", "unknown"),
+        })
+
+    session_activity.sort(key=lambda item: item.get("happened_at") or datetime.utcnow(), reverse=True)
+    average_session_duration_seconds = int(sum(durations) / len(durations)) if durations else 0
+
+    return {
+        "property_id": property_id,
+        "visits_count": int(visits_count),
+        "unique_visitors_count": int(unique_visitors_count),
+        "average_session_duration_seconds": int(average_session_duration_seconds),
+        "leads_count": int(leads_count),
+        "conversion_rate": float(conversion_rate),
+        "traffic_sources": traffic_sources,
+        "cta_breakdown": cta_breakdown,
+        "funnel": funnel,
+        "session_activity": session_activity[:20],
+    }
+
+
+async def get_marketing_analytics_db(owner_id: str) -> Dict[str, Any]:
+    now = datetime.utcnow()
+    daily_map: Dict[str, int] = defaultdict(int)
+    weekly_map: Dict[str, int] = defaultdict(int)
+    monthly_map: Dict[str, int] = defaultdict(int)
+    source_breakdown: Dict[str, int] = defaultdict(int)
+    cta_breakdown: Dict[str, int] = defaultdict(int)
+
+    async for lead in marketing_lead_collection.find({"owner_id": owner_id}, {"created_at": 1, "ad_source": 1, "request_type": 1}):
+        created = lead.get("created_at") or now
+        day_key = created.strftime("%Y-%m-%d")
+        week_key = f"{created.strftime('%Y')}-W{created.strftime('%W')}"
+        month_key = created.strftime("%Y-%m")
+        daily_map[day_key] += 1
+        weekly_map[week_key] += 1
+        monthly_map[month_key] += 1
+        source_breakdown[normalize_marketing_source(str(lead.get("ad_source") or ""))] += 1
+    async for ev in marketing_event_collection.find(
+        {"owner_id": owner_id, "event_type": {"$in": ["cta_whatsapp_click", "cta_call_click", "cta_primary_click"]}},
+        {"event_type": 1, "metadata": 1},
+    ):
+        if ev.get("event_type") == "cta_whatsapp_click":
+            cta_breakdown["whatsapp"] += 1
+        elif ev.get("event_type") == "cta_call_click":
+            cta_breakdown["call"] += 1
+        else:
+            metadata = ev.get("metadata") or {}
+            cta_key = str(metadata.get("cta_key") or "primary")
+            cta_breakdown[cta_key] += 1
+
+    daily_leads = [{"period": key, "count": value} for key, value in sorted(daily_map.items())]
+    weekly_leads = [{"period": key, "count": value} for key, value in sorted(weekly_map.items())]
+    monthly_leads = [{"period": key, "count": value} for key, value in sorted(monthly_map.items())]
+
+    return {
+        "daily_leads": daily_leads,
+        "weekly_leads": weekly_leads,
+        "monthly_leads": monthly_leads,
+        "source_breakdown": dict(source_breakdown),
+        "cta_breakdown": dict(cta_breakdown),
+    }
