@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 
 from config import CORS_ORIGIN_REGEX, CORS_ORIGINS, UPLOAD_DIR, ensure_stripe_env_or_raise
 from routers import (
@@ -39,6 +40,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_upload_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/uploads/"):
+        # Prevent content type sniffing for publicly served files.
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 

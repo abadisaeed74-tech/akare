@@ -278,28 +278,84 @@ const handleLogout = () => {
         if (!currentUser?.id) return;
         const token = localStorage.getItem('access_token');
         if (!token) return;
-        const source = new EventSource(`${API_BASE_URL}/notifications/stream?token=${encodeURIComponent(token)}`);
-        source.addEventListener('notification_created', (evt) => {
-            try {
-                const payload = JSON.parse((evt as MessageEvent).data || '{}');
-                const incoming = payload?.notification as NotificationItem | undefined;
-                if (incoming?.title) {
-                    message.info(`${incoming.title}: ${incoming.message}`);
+        const controller = new AbortController();
+        const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        // Security fix: use Authorization header stream, not JWT in URL.
+        const connectStream = async () => {
+            while (!controller.signal.aborted) {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/notifications/stream`, {
+                        method: 'GET',
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            Accept: 'text/event-stream',
+                        },
+                        signal: controller.signal,
+                    });
+                    if (!response.ok || !response.body) {
+                        await delay(3000);
+                        continue;
+                    }
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let eventName = 'message';
+                    let dataLines: string[] = [];
+
+                    const flushEvent = () => {
+                        if (dataLines.length === 0) return;
+                        const payloadText = dataLines.join('\n');
+                        if (eventName === 'notification_created') {
+                            try {
+                                const payload = JSON.parse(payloadText || '{}');
+                                const incoming = payload?.notification as NotificationItem | undefined;
+                                if (incoming?.title) {
+                                    message.info(`${incoming.title}: ${incoming.message}`);
+                                }
+                            } catch {
+                                // no-op
+                            }
+                            void fetchNotifications();
+                        } else if (eventName === 'notification_read' || eventName === 'notifications_read_all') {
+                            void fetchNotifications();
+                        }
+                        eventName = 'message';
+                        dataLines = [];
+                    };
+
+                    while (!controller.signal.aborted) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+                        for (const rawLine of lines) {
+                            const line = rawLine.replace(/\r$/, '');
+                            if (line === '') {
+                                flushEvent();
+                                continue;
+                            }
+                            if (line.startsWith('event:')) {
+                                eventName = line.slice(6).trim() || 'message';
+                            } else if (line.startsWith('data:')) {
+                                dataLines.push(line.slice(5).trim());
+                            }
+                        }
+                    }
+                } catch {
+                    // no-op
                 }
-            } catch {
-                // no-op
+                if (!controller.signal.aborted) {
+                    await delay(3000);
+                }
             }
-            void fetchNotifications();
-        });
-        source.addEventListener('notification_read', () => {
-            void fetchNotifications();
-        });
-        source.addEventListener('notifications_read_all', () => {
-            void fetchNotifications();
-        });
-        source.onerror = () => {};
+        };
+
+        void connectStream();
         return () => {
-            source.close();
+            controller.abort();
         };
     }, [currentUser?.id, fetchNotifications]);
 

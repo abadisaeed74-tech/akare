@@ -46,6 +46,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserPublic:
     user_data = await get_user_by_id(user_id)
     if user_data is None:
         raise credentials_exception
+    if (user_data.get("status") or "active") != "active":
+        # Security: disabled users cannot access protected endpoints.
+        raise credentials_exception
     return UserPublic(**user_data)
 
 
@@ -65,5 +68,8 @@ async def get_current_user_from_token(token: str) -> UserPublic:
 
     user_data = await get_user_by_id(user_id)
     if user_data is None:
+        raise credentials_exception
+    if (user_data.get("status") or "active") != "active":
+        # Security: disabled users cannot consume token-based streams.
         raise credentials_exception
     return UserPublic(**user_data)

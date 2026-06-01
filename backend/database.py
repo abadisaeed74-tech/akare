@@ -193,12 +193,12 @@ async def delete_property_db(property_id: str) -> bool:
     return result.deleted_count == 1
 
 
-async def delete_property_by_raw_text(raw_text: str) -> bool:
+async def delete_property_by_raw_text(raw_text: str, owner_id: str) -> bool:
     """
     Fallback delete for legacy documents that may not have a valid ObjectId.
-    Deletes a single document matching the given raw_text.
+    Deletes a single document matching the given raw_text within the owner's scope.
     """
-    result = await property_collection.delete_one({"raw_text": raw_text})
+    result = await property_collection.delete_one({"raw_text": raw_text, "owner_id": owner_id})
     return result.deleted_count == 1
 
 

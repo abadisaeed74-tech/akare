@@ -29,6 +29,18 @@ def read_root_service() -> Dict[str, str]:
     return {"message": "Welcome to the Akare Real Estate AI Backend"}
 
 
+def _sanitize_public_property(prop: Dict[str, object]) -> Dict[str, object]:
+    """
+    Public property responses must not expose internal owner/private fields.
+    """
+    sanitized = dict(prop or {})
+    sanitized["owner_name"] = None
+    sanitized["owner_contact_number"] = None
+    sanitized["owner_id"] = None
+    sanitized["raw_text"] = ""
+    return sanitized
+
+
 async def get_public_property_service(property_id: str, request: Request, response: Response) -> Property:
     cookie_name = f"viewed_property_{re.sub(r'[^A-Za-z0-9_-]', '_', property_id)}"
     skip_incr = (request.headers.get("x-akare-skip-view-count") or "").strip() == "1"
@@ -46,7 +58,7 @@ async def get_public_property_service(property_id: str, request: Request, respon
             secure=FRONTEND_BASE_URL.startswith("https://"),
             path="/",
         )
-    return Property(**prop)
+    return Property(**_sanitize_public_property(prop))
 
 
 def _tiktok_resolve_host_allowed(host: str) -> bool:
@@ -139,7 +151,7 @@ async def get_public_company_service(owner_id: str) -> CompanySettings:
 
 async def list_public_company_properties_service(owner_id: str) -> List[Property]:
     props = await get_properties({"owner_id": owner_id})
-    return [Property(**p) for p in props]
+    return [Property(**_sanitize_public_property(p)) for p in props]
 
 
 async def public_company_ai_search_service(owner_id: str, q: str) -> List[Property]:
@@ -166,7 +178,7 @@ async def public_company_ai_search_service(owner_id: str, q: str) -> List[Proper
         query["area"] = {"$gte": area * 0.8, "$lte": area * 1.2}
     properties = await get_properties(query)
     if properties:
-        return [Property(**p) for p in properties]
+        return [Property(**_sanitize_public_property(p)) for p in properties]
     search_query = {
         "owner_id": owner_id,
         "$or": [
@@ -180,4 +192,4 @@ async def public_company_ai_search_service(owner_id: str, q: str) -> List[Proper
         ],
     }
     rows = await get_properties(search_query)
-    return [Property(**p) for p in rows]
+    return [Property(**_sanitize_public_property(p)) for p in rows]

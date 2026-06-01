@@ -34,10 +34,16 @@ async def login_service(form_data: OAuth2PasswordRequestForm) -> dict:
     user = await get_user_by_email(form_data.username)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    if (user.get("status") or "active") != "active":
+        # Security: disabled users must not authenticate.
+        raise HTTPException(status_code=403, detail="هذا الحساب معطّل.")
 
     db_user = await user_collection.find_one({"email": form_data.username})
     if not db_user or not verify_password(form_data.password, db_user.get("password_hash", "")):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    if (db_user.get("status") or "active") != "active":
+        # Double-check against raw DB document before issuing token.
+        raise HTTPException(status_code=403, detail="هذا الحساب معطّل.")
 
     access_token = create_access_token(data={"sub": str(db_user["_id"])})
     return {"access_token": access_token, "token_type": "bearer"}

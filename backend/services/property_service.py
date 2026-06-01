@@ -415,7 +415,10 @@ async def delete_property_service(property_id: str, current_user: UserPublic) ->
 async def delete_property_by_raw_text_service(raw_text: str, current_user: UserPublic) -> None:
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه استخدام هذا النوع من الحذف.")
-    deleted = await delete_property_by_raw_text(raw_text)
+    if not current_user.id:
+        raise HTTPException(status_code=400, detail="لا يمكن تحديد مالك الحساب الحالي.")
+    # Security: enforce tenant isolation for raw_text fallback deletes.
+    deleted = await delete_property_by_raw_text(raw_text, current_user.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Property not found")
 

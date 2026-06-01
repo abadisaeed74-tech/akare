@@ -13,7 +13,6 @@ from services.notification_service import (
     mark_as_read,
     notification_stream,
 )
-from utils.security import get_current_user_from_token
 
 router = APIRouter()
 
@@ -72,10 +71,10 @@ async def delete_notification_endpoint(
 
 
 @router.get("/notifications/stream")
-async def notifications_stream(token: str = Query(..., min_length=8)):
-    user = await get_current_user_from_token(token)
+async def notifications_stream(current_user: UserPublic = Depends(get_current_user)):
+    # Security: rely on Authorization header instead of putting JWT in URL query params.
     return StreamingResponse(
-        notification_stream(user.id or ""),
+        notification_stream(current_user.id or ""),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

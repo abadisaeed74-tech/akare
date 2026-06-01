@@ -1,10 +1,12 @@
 import os
 from datetime import datetime
+from io import BytesIO
 from typing import Dict
 
 import cloudinary
 import cloudinary.uploader
 from fastapi import HTTPException, UploadFile
+from PIL import Image
 
 from config import (
     CLOUDINARY_ENABLED,
@@ -14,6 +16,54 @@ from config import (
 from models import UserPublic
 from services.stripe_service import refresh_trial_subscription_state
 from utils.permissions import require_permission
+
+MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "pdf"}
+ALLOWED_MIME_TYPES = {
+    "jpg": {"image/jpeg"},
+    "jpeg": {"image/jpeg"},
+    "png": {"image/png"},
+    "webp": {"image/webp"},
+    "pdf": {"application/pdf"},
+}
+BLOCKED_EXTENSIONS = {"exe", "js", "html", "htm", "svg", "php", "sh", "bat", "dll", "zip", "rar"}
+
+
+def _extract_extension(filename: str) -> str:
+    if "." not in filename:
+        return ""
+    return filename.rsplit(".", 1)[-1].lower().strip()
+
+
+def _validate_upload_security(filename: str, content_type: str, content: bytes) -> str:
+    ext = _extract_extension(filename)
+    if not ext:
+        raise HTTPException(status_code=400, detail="امتداد الملف مطلوب.")
+    if ext in BLOCKED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="نوع الملف غير مسموح.")
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="يسمح فقط برفع JPG/JPEG/PNG/WEBP/PDF.")
+
+    expected_mimes = ALLOWED_MIME_TYPES.get(ext, set())
+    if expected_mimes and content_type not in expected_mimes:
+        raise HTTPException(status_code=400, detail="نوع MIME لا يطابق امتداد الملف.")
+
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="حجم الملف أكبر من الحد المسموح (10MB).")
+
+    if ext == "pdf":
+        # Basic PDF signature validation.
+        if not content.startswith(b"%PDF"):
+            raise HTTPException(status_code=400, detail="ملف PDF غير صالح.")
+    else:
+        # Validate image structure with Pillow to reject fake image payloads.
+        try:
+            with Image.open(BytesIO(content)) as img:
+                img.verify()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="ملف الصورة غير صالح.") from exc
+
+    return ext
 
 
 async def upload_file_service(file: UploadFile, current_user: UserPublic) -> Dict[str, str]:
@@ -29,7 +79,6 @@ async def upload_file_service(file: UploadFile, current_user: UserPublic) -> Dic
         )
 
     original_name = file.filename or "file"
-    lower_name = original_name.lower()
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     safe_name = "".join(c for c in original_name if c.isalnum() or c in {".", "_", "-"}) or "file"
     filename = f"{timestamp}_{safe_name}"
@@ -37,10 +86,11 @@ async def upload_file_service(file: UploadFile, current_user: UserPublic) -> Dic
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="الملف فارغ، يرجى اختيار ملف صالح.")
+    ext = _validate_upload_security(filename, (file.content_type or "").lower().strip(), content)
 
     if CLOUDINARY_ENABLED:
         try:
-            cloud_resource_type = "raw" if lower_name.endswith(".pdf") else "auto"
+            cloud_resource_type = "raw" if ext == "pdf" else "image"
             result = cloudinary.uploader.upload(
                 content,
                 resource_type=cloud_resource_type,

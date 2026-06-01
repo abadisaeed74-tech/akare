@@ -16,7 +16,6 @@ from config import (
 from database import (
     get_company_by_stripe_customer_id,
     get_or_create_company_for_owner,
-    set_company_plan_db,
     set_company_stripe_customer_id,
     start_company_free_trial_db,
     update_company_billing_from_stripe,
@@ -249,10 +248,22 @@ async def confirm_checkout_session_service(
     customer_id = session.get("customer")
     subscription_id = session.get("subscription")
     metadata = stripe_obj_to_dict(session.get("metadata", {}))
+    metadata_owner_id = str(metadata.get("owner_user_id") or "").strip()
     plan_key = metadata.get("plan_key")
+
+    # Security check: prevent cross-account session replay/hijack.
+    # The checkout session must belong to the same authenticated owner.
+    if metadata_owner_id and metadata_owner_id != (current_user.id or ""):
+        raise HTTPException(status_code=403, detail="جلسة الدفع لا تخص هذا الحساب.")
 
     if not subscription_id:
         raise HTTPException(status_code=400, detail="لا يوجد اشتراك مرتبط بجلسة الدفع.")
+
+    company = await get_or_create_company_for_owner(current_user.id)
+    expected_customer_id = company.get("stripe_customer_id")
+    # Security check: if this account already has a Stripe customer, session customer must match.
+    if expected_customer_id and customer_id and expected_customer_id != customer_id:
+        raise HTTPException(status_code=403, detail="جلسة الدفع مرتبطة بعميل Stripe مختلف.")
 
     try:
         subscription = stripe.Subscription.retrieve(subscription_id)
@@ -403,8 +414,59 @@ async def activate_subscription_service(
     plan_key = data.plan_key
     if plan_key not in PLANS:
         raise HTTPException(status_code=400, detail="الخطة غير معروفة.")
+    # Security hardening:
+    # This endpoint should not activate paid plans blindly.
+    # It now only syncs existing Stripe subscription state for this owner.
+    ensure_stripe_ready()
+    company = await get_or_create_company_for_owner(current_user.id)
+    subscription_id = company.get("stripe_subscription_id")
+    if not subscription_id:
+        raise HTTPException(
+            status_code=400,
+            detail="لا يمكن تفعيل الاشتراك يدويًا بدون اشتراك Stripe فعلي. ابدأ الدفع عبر Checkout.",
+        )
+    try:
+        subscription = stripe.Subscription.retrieve(subscription_id)
+        subscription = stripe_obj_to_dict(subscription)
+    except Exception:
+        raise HTTPException(status_code=400, detail="تعذّر قراءة بيانات الاشتراك من Stripe.")
 
-    updated = await set_company_plan_db(current_user.id, plan_key)
+    stripe_status = subscription.get("status")
+    if stripe_status not in {"active", "trialing", "past_due"}:
+        raise HTTPException(status_code=400, detail="الاشتراك في Stripe غير نشط.")
+
+    items = stripe_obj_to_dict(subscription.get("items", {}))
+    item_list = items.get("data") or [{}]
+    current_item = stripe_obj_to_dict(item_list[0])
+    price_dict = stripe_obj_to_dict(current_item.get("price", {}))
+    price_id = price_dict.get("id")
+    mapped_plan = PRICE_ID_TO_PLAN_KEY.get(price_id)
+    final_plan_key = mapped_plan or plan_key
+
+    current_period_start_unix = subscription.get("current_period_start")
+    current_period_end_unix = subscription.get("current_period_end")
+    subscription_started_at = (
+        datetime.utcfromtimestamp(current_period_start_unix)
+        if current_period_start_unix
+        else None
+    )
+    subscription_ends_at = (
+        datetime.utcfromtimestamp(current_period_end_unix)
+        if current_period_end_unix
+        else None
+    )
+
+    updated = await update_company_billing_from_stripe(
+        current_user.id,
+        stripe_customer_id=company.get("stripe_customer_id"),
+        stripe_subscription_id=subscription_id,
+        plan_key=final_plan_key,
+        billing_status=stripe_status,
+        cancel_at_period_end=bool(subscription.get("cancel_at_period_end", False)),
+        is_subscribed=True,
+        subscription_started_at=subscription_started_at,
+        subscription_ends_at=subscription_ends_at,
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Company not found")
     return company_settings_response(updated)
