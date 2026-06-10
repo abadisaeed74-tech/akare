@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -16,6 +17,7 @@ from config import (
 from database import (
     get_company_by_stripe_customer_id,
     get_or_create_company_for_owner,
+    get_user_by_id,
     set_company_stripe_customer_id,
     start_company_free_trial_db,
     update_company_billing_from_stripe,
@@ -29,8 +31,11 @@ from models import (
     UserPublic,
 )
 from services.notification_service import create_owner_team_notification
+from services.email_service import is_brevo_configured, send_email
+from services.subscription_state import derive_subscription_snapshot
 
 stripe.api_key = STRIPE_SECRET_KEY or None
+logger = logging.getLogger(__name__)
 
 # Keep keys aligned with existing API contracts.
 PLANS: Dict[str, Dict[str, object]] = {
@@ -80,6 +85,7 @@ def ensure_stripe_ready(plan_key: Optional[str] = None) -> None:
 
 
 def company_settings_response(company: Dict) -> CompanySettings:
+    snapshot = derive_subscription_snapshot(company)
     return CompanySettings(
         company_name=company.get("company_name"),
         logo_url=company.get("logo_url"),
@@ -87,43 +93,44 @@ def company_settings_response(company: Dict) -> CompanySettings:
         contact_phone=company.get("contact_phone"),
         subdomain=company.get("subdomain"),
         plan_key=company.get("plan_key", "starter"),
-        is_subscribed=company.get("is_subscribed", False),
+        is_subscribed=bool(snapshot.get("effective_is_subscribed", company.get("is_subscribed", False))),
         subscription_started_at=company.get("subscription_started_at"),
         subscription_ends_at=company.get("subscription_ends_at"),
         billing_status=company.get("billing_status"),
         cancel_at_period_end=company.get("cancel_at_period_end", False),
         trial_used=company.get("trial_used", False),
+        subscription_status=snapshot.get("subscription_status"),
+        cancellation_reason=snapshot.get("cancellation_reason"),
+        auto_renewal_enabled=snapshot.get("auto_renewal_enabled"),
+        subscription_end_date_gregorian=snapshot.get("subscription_end_date_gregorian"),
     )
 
 
 async def refresh_trial_subscription_state(owner_user_id: str) -> Dict:
     company = await get_or_create_company_for_owner(owner_user_id)
-    if not company.get("is_subscribed", False):
-        return company
-    auto_expiring_statuses = {"trialing", "manual_free", "manual_extended"}
-    if company.get("billing_status") not in auto_expiring_statuses:
-        return company
-
-    ends_at = company.get("subscription_ends_at")
-    if not ends_at:
+    snapshot = derive_subscription_snapshot(company)
+    computed_subscribed = bool(snapshot.get("effective_is_subscribed", False))
+    stored_subscribed = bool(company.get("is_subscribed", False))
+    if computed_subscribed == stored_subscribed:
         return company
 
-    if isinstance(ends_at, str):
-        try:
-            ends_at = datetime.fromisoformat(ends_at.replace("Z", "+00:00")).replace(tzinfo=None)
-        except Exception:
-            return company
+    billing_status = company.get("billing_status")
+    if not computed_subscribed:
+        auto_expiring_statuses = {"trialing", "manual_free", "manual_extended"}
+        if billing_status in auto_expiring_statuses:
+            billing_status = "trial_ended"
+        elif billing_status in {None, "", "active", "past_due"}:
+            billing_status = "expired"
+    elif not billing_status:
+        billing_status = "active"
 
-    if isinstance(ends_at, datetime) and ends_at <= datetime.utcnow():
-        updated = await update_company_billing_from_stripe(
-            owner_user_id,
-            billing_status="trial_ended",
-            is_subscribed=False,
-            cancel_at_period_end=False,
-        )
-        if updated:
-            return updated
-
+    updated = await update_company_billing_from_stripe(
+        owner_user_id,
+        billing_status=billing_status,
+        is_subscribed=computed_subscribed,
+    )
+    if updated:
+        return updated
     return company
 
 
@@ -154,6 +161,45 @@ def stripe_obj_to_dict(value):
         except Exception:
             pass
     return value
+
+
+async def _send_payment_failed_email_if_needed(company: Dict, stripe_status: Optional[str]) -> None:
+    status = str(stripe_status or "").strip().lower()
+    if status not in {"past_due", "unpaid", "incomplete_expired"}:
+        return
+    previous = str(company.get("billing_status") or "").strip().lower()
+    if previous == status:
+        return
+    if not is_brevo_configured():
+        return
+    owner_id = str(company.get("owner_user_id") or "").strip()
+    if not owner_id:
+        return
+    owner_user = await get_user_by_id(owner_id)
+    owner_email = (owner_user or {}).get("email")
+    if not owner_email:
+        return
+    ends_at = company.get("subscription_ends_at")
+    end_text = "غير متوفر"
+    if isinstance(ends_at, datetime):
+        end_text = ends_at.strftime("%Y-%m-%d")
+    company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+    renew_link = f"{FRONTEND_BASE_URL}/settings?section=plans"
+    subject = f"تنبيه: مشكلة في دفعة اشتراك {company_name}"
+    body = (
+        "مرحبًا،\n\n"
+        f"واجهنا مشكلة في دفعة الاشتراك الخاصة بـ {company_name}.\n"
+        f"- الحالة الحالية: {status}\n"
+        f"- تاريخ نهاية الاشتراك الحالي: {end_text}\n"
+        f"- رابط إدارة الاشتراك: {renew_link}\n\n"
+        "يرجى تحديث وسيلة الدفع لتجنب توقف الخدمة.\n\n"
+        "تحياتنا,\n"
+        "Akare"
+    )
+    try:
+        await send_email(to_email=owner_email, subject=subject, plain_text=body)
+    except Exception:
+        logger.exception("Failed sending payment-failed email")
 
 
 async def create_checkout_session_service(
@@ -369,6 +415,7 @@ async def stripe_webhook_service(
         company = await get_company_by_stripe_customer_id(customer_id) if customer_id else None
         if company:
             stripe_status = data_object.get("status")
+            await _send_payment_failed_email_if_needed(company, stripe_status)
             cancel_at_period_end = bool(data_object.get("cancel_at_period_end", False))
             current_period_end_unix = data_object.get("current_period_end")
             current_period_start_unix = data_object.get("current_period_start")

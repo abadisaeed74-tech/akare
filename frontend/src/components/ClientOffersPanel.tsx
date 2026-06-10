@@ -1,6 +1,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Avatar,
   Button,
   Card,
@@ -22,7 +23,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowUpOutlined, ArrowDownOutlined, CloseOutlined, DeleteOutlined, FileTextOutlined, ShareAltOutlined, TeamOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
-import { getClientOffers, deleteClientOffer, createClientOffer, getProperties, resolveMediaUrl, getClientOfferNotes, createClientOfferNote, deleteClientOfferNote, updateClientOffer, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, getClientOffersStats, type ClientOffer, type ClientProfile, type Property, type ClientNote, type TeamUser, type UserPublic } from '../services/api';
+import { CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE, getClientsReadOnlyMode, getClientOffers, deleteClientOffer, createClientOffer, getProperties, resolveMediaUrl, getClientOfferNotes, createClientOfferNote, deleteClientOfferNote, updateClientOffer, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientProfile, deleteClientProfile, getClientOffersStats, type ClientOffer, type ClientProfile, type Property, type ClientNote, type TeamUser, type UserPublic } from '../services/api';
 import { formatRelativeActivityAr, maxUtcIso, parseBackendUtcMs } from '../utils/relativeActivityAr';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -167,6 +168,7 @@ const ClientOffersPanel: React.FC<Props> = ({ loading = false, currentUser }) =>
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
   const [assignmentTarget, setAssignmentTarget] = useState<ClientOfferDataType | null>(null);
 const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolean>>({});
+  const [clientsReadOnly, setClientsReadOnly] = useState(false);
   const canAssignEmployee = currentUser?.role === 'owner' || currentUser?.role === 'manager';
   const [creating, setCreating] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -185,23 +187,29 @@ const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolea
     try {
       // Load client offers + profiles with "offer" type (for Offers tab)
       // Also load stats from API for real percentage changes
-      const [offersData, propertiesData, offerProfilesData, teamUsersData, statsData] = await Promise.all([
+      const [offersData, propertiesData, offerProfilesData, teamUsersData, statsData, readOnlyMode] = await Promise.all([
         getClientOffers(),
         getProperties({}),
         getClientProfilesByType('offer'),  // Get profiles with offer type
         getTeamUsers().catch(() => [] as TeamUser[]),
         getClientOffersStats().catch(() => null),
+        getClientsReadOnlyMode().catch(() => false),
       ]);
       setAllProperties(propertiesData);
       setTeamUsers(teamUsersData.filter((user) => user.status === 'active'));
       setClients(mergeProfilesWithOffers(offerProfilesData, offersData, propertiesData));
       setOffersStats(statsData);
+      setClientsReadOnly(readOnlyMode);
     } catch {
       message.error('تعذر تحميل العروض.');
     }
   };
 
   const handleAssignEmployee = async (offerId: string, userId: string | null) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     const selectedUser = teamUsers.find((user) => user.id === userId);
     setAssigningMap((prev) => ({ ...prev, [offerId]: true }));
     try {
@@ -219,6 +227,10 @@ const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolea
   };
 
   const handleDeleteClientOffers = async (record: ClientOfferDataType) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     setDeletingClientMap((prev) => ({ ...prev, [record.profileId]: true }));
     try {
       await Promise.all(record.offers.map((offer) => deleteClientOffer(offer.id)));
@@ -251,6 +263,10 @@ const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolea
   }, [clients, assignmentTarget]);
 
 const handleDeleteOffer = async (offerId: string) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     setDeletingMap((prev) => ({ ...prev, [offerId]: true }));
     try {
       await deleteClientOffer(offerId);
@@ -285,6 +301,10 @@ const handleDeleteOffer = async (offerId: string) => {
   };
 
 const handleAddNote = async () => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     const offerId = notesOfferId;
     const content = newNoteContent.trim();
     
@@ -320,6 +340,10 @@ const handleAddNote = async () => {
   };
 
 const handleDeleteNote = async (noteId: string) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     // Guard: ensure offerId is valid
     if (!notesOfferId || notesOfferId.trim() === '') {
       message.error('رقم العرض غير محدد أو غير صالح.');
@@ -337,6 +361,10 @@ const handleDeleteNote = async (noteId: string) => {
 
   // Update offer status
   const handleStatusChange = async (offerId: string, newStatus: ClientOfferStatus) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     setSavingMap((prev) => ({ ...prev, [offerId]: true }));
     // Map Arabic status to backend status
     const backendStatus = newStatus === 'جديد' ? 'new' : newStatus === ' جاري ' ? 'working' : 'closed';
@@ -352,6 +380,10 @@ const handleDeleteNote = async (noteId: string) => {
   };
 
 const handleCreate = async () => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       const values = await createForm.validateFields();
       setCreating(true);
@@ -511,7 +543,7 @@ const stats = useMemo(() => {
             <Button
               size="small"
               onClick={() => openAssignmentModal(record)}
-              disabled={record.offers.length === 0}
+              disabled={clientsReadOnly || record.offers.length === 0}
             >
               تعيين الموظف
             </Button>
@@ -538,6 +570,7 @@ const stats = useMemo(() => {
           cancelText="إلغاء"
           okButtonProps={{ danger: true }}
           onConfirm={() => handleDeleteClientOffers(record)}
+          disabled={clientsReadOnly}
         >
           <Button
             size="small"
@@ -545,6 +578,7 @@ const stats = useMemo(() => {
             danger
             icon={<DeleteOutlined />}
             loading={!!deletingClientMap[record.profileId]}
+            disabled={clientsReadOnly}
           />
         </Popconfirm>
       ),
@@ -566,6 +600,11 @@ return (
       }}
     >
       <Row gutter={[12, 12]}>
+        {clientsReadOnly && (
+          <Col span={24}>
+            <Alert showIcon type="warning" message={CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE} />
+          </Col>
+        )}
         <Col xs={24} sm={12} lg={8}>
           <Card size="small" styles={{ body: { padding: 12 } }}>
             <Statistic
@@ -631,6 +670,7 @@ return (
             type="primary"
             size="small"
             onClick={() => setCreateModalOpen(true)}
+            disabled={clientsReadOnly}
           >
             + إضافة عميل
           </Button>
@@ -720,6 +760,7 @@ return (
                             style={{ width: stackSm ? '100%' : 100, maxWidth: stackSm ? 200 : undefined }}
                             size="small"
                             onChange={(val) => handleStatusChange(offer.id, val as ClientOfferStatus)}
+                            disabled={clientsReadOnly}
                             options={[
                               { value: 'جديد', label: 'جديد' },
                               { value: ' جاري ', label: ' جاري ' },
@@ -744,6 +785,7 @@ return (
                                   placeholder="اختر موظف"
                                   value={offer.assignedUserId || undefined}
                                   loading={!!assigningMap[offer.id]}
+                                  disabled={clientsReadOnly}
                                   style={{ minWidth: 150 }}
                                   onChange={(value) => handleAssignEmployee(offer.id, value || null)}
                                   options={teamUsers.map((user) => ({
@@ -762,6 +804,7 @@ return (
                               type="text"
                               icon={<EditOutlined />}
                               onClick={() => openNotesModal(offer.id)}
+                              disabled={clientsReadOnly}
                               style={{ color: '#8c8c8c' }}
                               title="ملاحظات"
                             />
@@ -779,8 +822,9 @@ return (
                               okText="حذف"
                               cancelText="إلغاء"
                               onConfirm={() => handleDeleteOffer(offer.id)}
+                              disabled={clientsReadOnly}
                             >
-                              <Button size="small" type="text" danger icon={<DeleteOutlined />} loading={!!deletingMap[offer.id]} />
+                              <Button size="small" type="text" danger icon={<DeleteOutlined />} loading={!!deletingMap[offer.id]} disabled={clientsReadOnly} />
                             </Popconfirm>
                           </Space>
                         </div>
@@ -891,7 +935,7 @@ return (
             size="small"
             loading={savingNote}
             onClick={handleAddNote}
-            disabled={!newNoteContent.trim()}
+            disabled={clientsReadOnly || !newNoteContent.trim()}
             style={{ background: '#3f7d3c' }}
           >
             إضافة
@@ -924,6 +968,7 @@ return (
                 <Popconfirm
                   title="حذف هذه الملاحظة؟"
                   onConfirm={() => handleDeleteNote(note.id)}
+                  disabled={clientsReadOnly}
                   okText="حذف"
                   cancelText="إلغاء"
                 >
@@ -984,6 +1029,7 @@ return (
                     placeholder="اختر الموظف المسؤول عن هذا العرض"
                     value={offer.assignedUserId || undefined}
                     loading={!!assigningMap[offer.id]}
+                    disabled={clientsReadOnly}
                     onChange={async (value) => {
                       await handleAssignEmployee(offer.id, value || null);
                     }}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Avatar,
+  Alert,
   Button,
   Card,
   DatePicker,
@@ -60,11 +61,14 @@ import {
   getClientOfferNotes,
   createClientOfferNote,
   deleteClientOfferNote,
+  MATCHING_READ_ONLY_SUBSCRIPTION_MESSAGE,
   getClientOffer,
   getClientProfileByClient,
   getClientProfile,
   getTeamUsers,
   deleteClientProfile,
+  CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE,
+  getClientsReadOnlyMode,
   type ClientRequest,
   type ClientOffer,
   type Property,
@@ -248,6 +252,7 @@ const [offersModalOpen, setOffersModalOpen] = useState(false);
   const [offerNotesOfferId, setOfferNotesOfferId] = useState<string | null>(null);
   const [newOfferNoteContent, setNewOfferNoteContent] = useState('');
   const [savingOfferNote, setSavingOfferNote] = useState(false);
+  const [clientsReadOnly, setClientsReadOnly] = useState(false);
   
   // Offer reminder modal state
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
@@ -292,12 +297,14 @@ const load = useCallback(async () => {
     setLoading(true);
     try {
       // First load all properties (needed for offers)
-      const [properties, users] = await Promise.all([
+      const [properties, users, readOnlyMode] = await Promise.all([
         getProperties({}),
         getTeamUsers().catch(() => [] as TeamUser[]),
+        getClientsReadOnlyMode().catch(() => false),
       ]);
       setAllProperties(properties);
       setTeamUsers(users.filter((u) => u.status === 'active'));
+      setClientsReadOnly(readOnlyMode);
       
       // Load persistent client profile: prefer stable id from URL (?profile_id=) then name/phone
       const profileIdFromQuery = profileIdParam || null;
@@ -406,6 +413,10 @@ deadline_at: item.deadline_at ? dayjs.utc(item.deadline_at).tz(SAUDI_TZ) : null,
 
 const saveEdit = async () => {
     if (!editing) return;
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       const values = await form.validateFields();
       
@@ -491,6 +502,10 @@ const handleLogout = () => {
       message.error('لا يوجد ملف عميل لحذفه.');
       return;
     }
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       // Delete all offers for this client first
       const phoneParam = phoneFromUrlForLookup(phone);
@@ -514,6 +529,10 @@ const handleLogout = () => {
 
 // Handle create new request with AI - associate with current client
   const handleCreate = async () => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       const values = await createForm.validateFields();
       setCreating(true);
@@ -546,6 +565,10 @@ const handleLogout = () => {
 
 // Inline matching - run match for a specific request (toggle inline on card)
   const runMatch = async (item: ClientRequest) => {
+    if (clientsReadOnly) {
+      message.warning(MATCHING_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     // If results already shown, hide them (toggle off)
     if (matchMap[item.id] && matchMap[item.id].length > 0) {
       setMatchMap((prev) => {
@@ -581,6 +604,10 @@ const handleLogout = () => {
 
 // Save row (update status inline)
   const saveRow = async (item: ClientRequest, updates: Partial<ClientRequest>) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     setSavingMap((prev) => ({ ...prev, [item.id]: true }));
     try {
       await updateClientRequest(item.id, updates);
@@ -609,6 +636,10 @@ const handleLogout = () => {
   };
 
 const handleAddNote = async () => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     const requestId = notesRequestId;
     const content = newNoteContent.trim();
     
@@ -646,6 +677,10 @@ const handleAddNote = async () => {
   };
 
 const handleDeleteNote = async (noteId: string) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     if (!notesRequestId) return;
     try {
       await deleteClientNote(notesRequestId, noteId);
@@ -674,6 +709,10 @@ const handleDeleteNote = async (noteId: string) => {
   };
 
   const handleAddOfferNote = async () => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     const offerId = offerNotesOfferId;
     const content = newOfferNoteContent.trim();
     
@@ -708,6 +747,10 @@ const handleDeleteNote = async (noteId: string) => {
   };
 
 const handleDeleteOfferNote = async (noteId: string) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     if (!offerNotesOfferId) return;
     try {
       await deleteClientOfferNote(offerNotesOfferId, noteId);
@@ -721,6 +764,10 @@ const handleDeleteOfferNote = async (noteId: string) => {
 
 // Update offer status
   const handleOfferStatusChange = async (offerId: string, newStatus: string) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     const backendStatus = newStatus === 'جديد' ? 'new' : newStatus === ' جاري ' ? 'working' : 'closed';
     try {
       await updateClientOffer(offerId, { status: backendStatus });
@@ -747,6 +794,10 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
 // Save reminder for offer
   const saveOfferReminder = async () => {
     if (!reminderOffer) return;
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       const values = await reminderForm.validateFields();
       await updateClientOffer(reminderOffer.id, {
@@ -946,6 +997,14 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
             </div>
           </Header>
           <Content style={{ margin: '0 4px 4px' }}>
+            {clientsReadOnly && (
+              <Alert
+                showIcon
+                type="warning"
+                style={{ marginBottom: 12, maxWidth: 720 }}
+                message={CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE}
+              />
+            )}
 <Card size="small" style={{ marginBottom: 12, borderRadius: 14, maxWidth: 500 }}>
               <Space wrap>
                 <Avatar icon={<UserOutlined />} />
@@ -974,6 +1033,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                       setCreateModalOpen(true);
                     }
                   }}
+                  disabled={clientsReadOnly}
                   style={{ background: '#1677ff' }}
                 >
                   {primaryAction === 'offer' ? 'إضافة عرض' : 'إضافة طلب'}
@@ -986,8 +1046,9 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                     cancelText="إلغاء"
                     okButtonProps={{ danger: true }}
                     onConfirm={handleDeleteClient}
+                    disabled={clientsReadOnly}
                   >
-                    <Button size="small" danger icon={<DeleteOutlined />}>
+                    <Button size="small" danger icon={<DeleteOutlined />} disabled={clientsReadOnly}>
                        
                     </Button>
                   </Popconfirm>
@@ -1016,6 +1077,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                       value={item.status}
                       style={{ width: 140 }}
                       onChange={(val) => saveRow(item, { status: val as ClientRequest['status'] })}
+                      disabled={clientsReadOnly}
                       options={[
                         { value: 'new', label: 'جديد' },
                         { value: 'searching', label: 'جاري البحث' },
@@ -1075,6 +1137,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                         
                         onClick={() => runMatch(item)}
                         loading={!!loadingMatchMap[item.id]}
+                        disabled={clientsReadOnly}
                       >
                         المطابقة
                       </Button>
@@ -1082,15 +1145,20 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                         size="small" 
                         
                         onClick={() => openNotesModal(item)}
+                        disabled={clientsReadOnly}
                       >
                         ملاحظات
                       </Button>
-                      <Button size="small" onClick={() => openEdit(item)}>تعديل</Button>
+                      <Button size="small" onClick={() => openEdit(item)} disabled={clientsReadOnly}>تعديل</Button>
                       <Popconfirm
                         title="حذف الطلب؟"
                         okText="حذف"
                         cancelText="إلغاء"
                         onConfirm={async () => {
+                          if (clientsReadOnly) {
+                            message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+                            return;
+                          }
                           try {
                             await deleteClientRequest(item.id);
                             message.success('تم حذف الطلب.');
@@ -1100,7 +1168,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                           }
                         }}
                       >
-                        <Button size="small" danger>حذف</Button>
+                        <Button size="small" danger disabled={clientsReadOnly}>حذف</Button>
                       </Popconfirm>
                     </Space>
 
@@ -1258,7 +1326,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                             {offer.assigned_user_name ? <Tag color="blue">المسؤول: {offer.assigned_user_name}</Tag> : <Tag>غير مخصص</Tag>}
                           </div>
 <Tag color={getOfferStatusColor(mapOfferStatus(offer.status))} style={{ fontSize: 11, marginTop: 'auto', width: 'fit-content' }}>
-                            <Select value={mapOfferStatus(offer.status)} style={{ width: 85 }} size="small" variant="borderless" onChange={(val) => handleOfferStatusChange(offer.id, val as string)} options={[{ value: 'جديد', label: 'جديد' }, { value: ' جاري ', label: 'جاري' }, { value: 'اغلاق', label: 'مغلق' }]} />
+                            <Select value={mapOfferStatus(offer.status)} style={{ width: 85 }} size="small" variant="borderless" onChange={(val) => handleOfferStatusChange(offer.id, val as string)} options={[{ value: 'جديد', label: 'جديد' }, { value: ' جاري ', label: 'جاري' }, { value: 'اغلاق', label: 'مغلق' }]} disabled={clientsReadOnly} />
                           </Tag>
                         </div>
 <div style={{ paddingTop: 8, borderTop: `1px solid ${palette.glassBorder}`, marginTop: 'auto', display: 'flex', justifyContent: 'center' }}>
@@ -1267,6 +1335,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                               size="middle"
                               icon={<ClockCircleOutlined />}
                               onClick={() => openOfferReminderModal(offer)}
+                              disabled={clientsReadOnly}
                               style={{ color: '#8c8c8c', minWidth: 40 }}
                               title="إضافة متابعة"
                             />
@@ -1274,6 +1343,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                               size="middle"
                               icon={<EditOutlined />}
                               onClick={() => openOfferNotesModal(offer.id)}
+                              disabled={clientsReadOnly}
                               style={{ color: '#faad14', minWidth: 40 }}
                               title="ملاحظات"
                             />
@@ -1300,6 +1370,10 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                               okText="حذف"
                               cancelText="إلغاء"
                               onConfirm={async () => {
+                                if (clientsReadOnly) {
+                                  message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+                                  return;
+                                }
                                 try {
                                   await deleteClientOffer(offer.id);
                                   message.success('تم حذف العرض.');
@@ -1309,7 +1383,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                                 }
                               }}
                             >
-                              <Button size="middle" icon={<DeleteOutlined />} danger style={{ minWidth: 40 }} />
+                              <Button size="middle" icon={<DeleteOutlined />} danger style={{ minWidth: 40 }} disabled={clientsReadOnly} />
                             </Popconfirm>
                           </Space>
                         </div>
@@ -1325,6 +1399,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
               title="تعديل بيانات طلب العميل"
               onCancel={() => setEditing(null)}
               onOk={saveEdit}
+              okButtonProps={{ disabled: clientsReadOnly }}
               okText="حفظ"
               cancelText="إلغاء"
               style={{ direction: 'rtl' }}
@@ -1433,7 +1508,7 @@ deadline_at: offer.deadline_at ? dayjs.utc(offer.deadline_at).tz(SAUDI_TZ) : nul
                   size="small"
                   loading={savingNote}
                   onClick={handleAddNote}
-                  disabled={!newNoteContent.trim()}
+                  disabled={clientsReadOnly || !newNoteContent.trim()}
                   style={{ background: '#3f7d3c' }}
                 >
                   إضافة
@@ -1466,6 +1541,7 @@ style={{
                       <Popconfirm
                         title="حذف هذه الملاحظة؟"
                         onConfirm={() => handleDeleteNote(note.id)}
+                        disabled={clientsReadOnly}
                         okText="حذف"
                         cancelText="إلغاء"
                       >
@@ -1497,7 +1573,7 @@ style={{ position: 'absolute', top: 8, left: 8 }}
                 }}>
                   إلغاء
                 </Button>,
-                <Button key="submit" type="primary" loading={creating} onClick={handleCreate}>
+                <Button key="submit" type="primary" loading={creating} onClick={handleCreate} disabled={clientsReadOnly}>
                   إضافة وتحليل بالذكاء الاصطناعي
                 </Button>,
               ]}
@@ -1544,6 +1620,10 @@ style={{ position: 'absolute', top: 8, left: 8 }}
                       size="small"
                       style={{ borderRadius: 10, cursor: 'pointer' }}
                       onClick={async () => {
+                        if (clientsReadOnly) {
+                          message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+                          return;
+                        }
                         try {
 await createClientOffer({
                             profile_id: clientProfile?.id,
@@ -1586,7 +1666,7 @@ await createClientOffer({
                             {property.city} | {property.price?.toLocaleString('ar-SA')} ر.س
                           </Text>
                         </div>
-                        <Button size="small" type="primary" style={{ background: '#3f7d3c' }}>
+                        <Button size="small" type="primary" style={{ background: '#3f7d3c' }} disabled={clientsReadOnly}>
                           إضافة
                         </Button>
                       </div>
@@ -1605,6 +1685,7 @@ await createClientOffer({
                 setReminderOffer(null);
               }}
               onOk={saveOfferReminder}
+              okButtonProps={{ disabled: clientsReadOnly }}
               okText="حفظ"
               cancelText="إلغاء"
               style={{ direction: 'rtl' }}
@@ -1687,7 +1768,7 @@ await createClientOffer({
                   size="small"
                   loading={savingOfferNote}
                   onClick={handleAddOfferNote}
-                  disabled={!newOfferNoteContent.trim()}
+                  disabled={clientsReadOnly || !newOfferNoteContent.trim()}
                   style={{ background: '#3f7d3c' }}
                 >
                   إضافة
@@ -1720,6 +1801,7 @@ await createClientOffer({
                       <Popconfirm
                         title="حذف هذه الملاحظة؟"
                         onConfirm={() => handleDeleteOfferNote(note.id)}
+                        disabled={clientsReadOnly}
                         okText="حذف"
                         cancelText="إلغاء"
                       >

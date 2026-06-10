@@ -86,7 +86,24 @@ const navItems: Array<{ key: AdminSection; label: string; icon: React.ElementTyp
 ];
 
 const formatNumber = (v: number) => v.toLocaleString('ar-SA');
-const formatDateTime = (v?: string | null) => (v ? new Date(v).toLocaleString('ar-SA') : 'غير متوفر');
+const formatDateTime = (v?: string | null) =>
+  v
+    ? new Intl.DateTimeFormat('en-CA', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(new Date(v))
+    : 'غير متوفر';
+const statusLabel = (status?: string | null) => {
+  if (status === 'active') return 'نشط';
+  if (status === 'trialing') return 'تجريبي';
+  if (status === 'cancelled') return 'ملغي';
+  if (status === 'expired') return 'منتهي';
+  return 'غير محدد';
+};
 const PLAN_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'starter', label: 'مبتدئ' },
   { key: 'business', label: 'احترافية' },
@@ -243,9 +260,9 @@ const PlatformAdminPage: React.FC = () => {
   }, [offices]);
 
   const statusCounts = useMemo(() => {
-    const active = offices.filter((o) => o.is_subscribed).length;
-    const trial = offices.filter((o) => (o.billing_status || '').toLowerCase().includes('trial')).length;
-    const inactive = offices.length - active;
+    const active = offices.filter((o) => o.subscription_status === 'active').length;
+    const trial = offices.filter((o) => o.subscription_status === 'trialing').length;
+    const inactive = offices.filter((o) => o.subscription_status === 'expired' || o.subscription_status === 'cancelled').length;
     return [
       { name: 'نشط', value: active },
       { name: 'تجريبي', value: trial },
@@ -269,10 +286,9 @@ const PlatformAdminPage: React.FC = () => {
     const filtered = offices.filter((office) => {
       if (planFilter !== 'all' && office.plan_key !== planFilter) return false;
       if (statusFilter !== 'all') {
-        const billing = (office.billing_status || '').toLowerCase();
-        if (statusFilter === 'active' && !office.is_subscribed) return false;
-        if (statusFilter === 'trial' && !billing.includes('trial')) return false;
-        if (statusFilter === 'inactive' && office.is_subscribed) return false;
+        if (statusFilter === 'active' && office.subscription_status !== 'active') return false;
+        if (statusFilter === 'trial' && office.subscription_status !== 'trialing') return false;
+        if (statusFilter === 'inactive' && !['expired', 'cancelled'].includes(office.subscription_status || '')) return false;
       }
       if (!q) return true;
       return [office.company_name || '', office.owner_email || '', office.owner_user_id || '', office.plan_key || '', office.billing_status || '']
@@ -669,7 +685,7 @@ const PlatformAdminPage: React.FC = () => {
                           <td className="px-3 py-3">{office.company_name || 'بدون اسم'}</td>
                           <td className="px-3 py-3">{office.owner_email || 'غير متوفر'}</td>
                           <td className="px-3 py-3">{office.plan_key}</td>
-                          <td className="px-3 py-3">{office.billing_status || (office.is_subscribed ? 'نشط' : 'غير نشط')}</td>
+                          <td className="px-3 py-3">{statusLabel(office.subscription_status)}</td>
                           <td className="px-3 py-3">{formatNumber(office.total_properties)}</td>
                           <td className="px-3 py-3">{formatNumber(office.total_employees)}</td>
                           <td className="px-3 py-3">{formatDateTime(office.updated_at || office.created_at)}</td>
@@ -889,13 +905,13 @@ const PlatformAdminPage: React.FC = () => {
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                       {[
                         ['الخطة', officeDetail.plan_key],
-                        ['حالة الاشتراك', `${officeDetail.is_subscribed ? 'نشط' : 'غير نشط'} / ${officeDetail.billing_status || 'غير محدد'}`],
+                        ['حالة الاشتراك', `${statusLabel(officeDetail.subscription_status)} / ${officeDetail.billing_status || 'غير محدد'}`],
                         ['عدد العقارات', formatNumber(officeDetail.total_properties)],
                         ['عدد الموظفين', formatNumber(officeDetail.total_employees)],
                         ['البريد الرسمي', officeDetail.official_email || 'غير متوفر'],
                         ['الهاتف', officeDetail.contact_phone || 'غير متوفر'],
                         ['النطاق الفرعي', officeDetail.subdomain || 'غير متوفر'],
-                        ['نهاية الاشتراك', formatDateTime(officeDetail.subscription_ends_at)],
+                        ['نهاية الاشتراك', officeDetail.subscription_end_date_gregorian || formatDateTime(officeDetail.subscription_ends_at)],
                       ].map(([k, v]) => (
                         <div key={k} className="rounded-xl border border-slate-200 p-3 text-sm dark:border-slate-700">
                           <p className="mb-1 text-xs text-slate-500">{k}</p>

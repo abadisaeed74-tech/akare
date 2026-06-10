@@ -39,6 +39,8 @@ import {
   CheckCircleOutlined,
   ApartmentOutlined,
   InfoCircleOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
@@ -124,6 +126,38 @@ const roleColor = (role?: TeamUser['role']) => {
   if (role === 'owner') return 'gold';
   if (role === 'manager') return 'green';
   return 'blue';
+};
+
+const formatGregorianDate = (value?: string | null): string => {
+  if (!value) return 'غير متوفر';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'غير متوفر';
+  return new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'Asia/Riyadh',
+  }).format(date);
+};
+
+const formatGregorianDateLong = (value?: string | null): string => {
+  if (!value) return 'غير متوفر';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'غير متوفر';
+  return new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    timeZone: 'Asia/Riyadh',
+  }).format(date);
+};
+
+const subscriptionStatusLabel = (status?: string | null): string => {
+  if (status === 'active') return 'نشط';
+  if (status === 'trialing') return 'تجريبي';
+  if (status === 'cancelled') return 'ملغي';
+  if (status === 'expired') return 'منتهي';
+  return 'غير محدد';
 };
 
 const defaultEmployeePermissions: Required<EmployeePermissions> = {
@@ -227,6 +261,10 @@ const [savingDisplayName, setSavingDisplayName] = useState(false);
   const [subdomainModalVisible, setSubdomainModalVisible] = useState(false);
   const [isEmployeeModalVisible, setIsEmployeeModalVisible] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<TeamUser | null>(null);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [isMobile, setIsMobile] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false,
+  );
   const navigate = useNavigate();
   const [accountForm] = Form.useForm<CompanySettings>();
 const [employeeForm] = Form.useForm<{
@@ -286,6 +324,13 @@ const user = await getCurrentUser();
     };
     init();
   }, [accountForm, navigate]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const handleBackToApp = () => {
     navigate('/app');
@@ -500,21 +545,21 @@ employeeForm.setFieldsValue({
 
   const renderPlansSection = () => {
     const effectiveSubscribedPlanKey = companySettings.plan_key || planUsage.plan.key;
-    const hasSubscription = !!companySettings.is_subscribed;
+    const computedStatus = companySettings.subscription_status || (companySettings.is_subscribed ? 'active' : 'expired');
+    const hasSubscription = computedStatus === 'active' || computedStatus === 'trialing';
+    const autoRenewalEnabled =
+      typeof companySettings.auto_renewal_enabled === 'boolean'
+        ? companySettings.auto_renewal_enabled
+        : hasSubscription && !companySettings.cancel_at_period_end;
     const canStartTrial = !hasSubscription && !companySettings.trial_used;
-    const startedAt = companySettings.subscription_started_at
-      ? new Date(companySettings.subscription_started_at)
-      : null;
-    const endsAt = companySettings.subscription_ends_at
-      ? new Date(companySettings.subscription_ends_at)
-      : null;
+    const startedAtRaw = companySettings.subscription_started_at || null;
+    const endsAtRaw = companySettings.subscription_ends_at || null;
+    const startedAt = startedAtRaw ? new Date(startedAtRaw) : null;
+    const endsAt = endsAtRaw ? new Date(endsAtRaw) : null;
 
-    let totalDays: number | null = null;
     let remainingDays: number | null = null;
     if (startedAt && endsAt) {
-      const totalMs = endsAt.getTime() - startedAt.getTime();
       const remainingMs = endsAt.getTime() - new Date().getTime();
-      totalDays = Math.max(1, Math.round(totalMs / (1000 * 60 * 60 * 24)));
       remainingDays = Math.max(0, Math.round(remainingMs / (1000 * 60 * 60 * 24)));
     }
 
@@ -606,7 +651,7 @@ features.push('تخزين 100 ج.ب');
                 </Title>
                 <Text style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14 }}>
                   {hasSubscription
-                    ? `حالة الفوترة: ${companySettings.billing_status || 'غير متوفرة'}${companySettings.cancel_at_period_end ? ' - سيتم الإلغاء نهاية الفترة' : ''}`
+                    ? `الحالة: ${subscriptionStatusLabel(computedStatus)} • التجديد التلقائي: ${autoRenewalEnabled ? 'مفعل' : 'متوقف'}`
                     : companySettings.trial_used
                       ? 'تم استخدام التجربة المجانية. اختر خطة مدفوعة لمتابعة التوسع.'
                       : 'ابدأ التجربة أو اختر الخطة التي تناسب حجم مكتبك.'}
@@ -748,9 +793,14 @@ style={{
                 children: (
                   <Descriptions bordered column={1} size="middle">
                     <Descriptions.Item label="الخطة الحالية">{planUsage.plan.name} ({planUsage.plan.key})</Descriptions.Item>
-                    <Descriptions.Item label="مدة الاشتراك">{totalDays != null ? `${totalDays} يوم` : 'اشتراك شهري'}</Descriptions.Item>
-                    <Descriptions.Item label="تاريخ التفعيل">{startedAt ? startedAt.toLocaleString('ar-SA') : 'غير متوفر'}</Descriptions.Item>
-                    <Descriptions.Item label="تاريخ الانتهاء">{endsAt ? endsAt.toLocaleString('ar-SA') : 'غير متوفر'}</Descriptions.Item>
+                    <Descriptions.Item label="الحالة">{subscriptionStatusLabel(computedStatus)}</Descriptions.Item>
+                    <Descriptions.Item label="التجديد التلقائي">
+                      {autoRenewalEnabled ? 'مفعل' : 'متوقف'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="تاريخ التفعيل">{formatGregorianDate(startedAtRaw)}</Descriptions.Item>
+                    <Descriptions.Item label="ينتهي في">
+                      {formatGregorianDate(endsAtRaw)} ({formatGregorianDateLong(endsAtRaw)})
+                    </Descriptions.Item>
                     <Descriptions.Item label="الوقت المتبقي">{remainingDays != null ? `${remainingDays} يوم تقريبا` : 'غير متوفر'}</Descriptions.Item>
                   </Descriptions>
                 ),
@@ -1212,9 +1262,15 @@ if (editingEmployee) {
           <Descriptions.Item label="الخطة الحالية">
             {planUsage.plan.name} ({planUsage.plan.key})
           </Descriptions.Item>
+          <Descriptions.Item label="الحالة">
+            {subscriptionStatusLabel(companySettings.subscription_status || (companySettings.is_subscribed ? 'active' : 'expired'))}
+          </Descriptions.Item>
           <Descriptions.Item label="حالة الفوترة">
             {companySettings.billing_status || 'غير متوفر'}
             {companySettings.cancel_at_period_end ? ' - سيتم الإلغاء نهاية الفترة' : ''}
+          </Descriptions.Item>
+          <Descriptions.Item label="تاريخ الانتهاء (ميلادي)">
+            {companySettings.subscription_end_date_gregorian || formatGregorianDate(companySettings.subscription_ends_at)}
           </Descriptions.Item>
         </Descriptions>
         <Button
@@ -1259,20 +1315,21 @@ if (editingEmployee) {
 
   return (
     <Layout className="dashboard-light" style={{ minHeight: '100vh', direction: 'rtl', background: palette.pageBg, padding: 14 }}>
-      <Sider
-        width={276}
-        style={{
-          background: palette.surface,
-          borderLeft: `1px solid ${palette.border}`,
-          borderRadius: 20,
-          overflowY: 'auto',
-          position: 'sticky',
-          top: 14,
-          alignSelf: 'flex-start',
-          height: 'calc(100vh - 28px)',
-          zIndex: 20,
-        }}
-      >
+      {sidebarVisible && (
+        <Sider
+          width={276}
+          style={{
+            background: palette.surface,
+            borderLeft: `1px solid ${palette.border}`,
+            borderRadius: 20,
+            overflowY: 'auto',
+            position: 'fixed',
+            top: 14,
+            right: 14,
+            height: 'calc(100vh - 28px)',
+            zIndex: 20,
+          }}
+        >
         <div style={{ padding: '20px 18px 16px', borderBottom: `1px solid ${palette.border}` }}>
           <Space direction="vertical" size={4}>
             <Avatar style={{ background: palette.accent, color: '#fff' }} icon={<SettingOutlined />} />
@@ -1313,9 +1370,16 @@ if (editingEmployee) {
             </Space>
           </Card>
         </div>
-      </Sider>
-      <Layout style={{ background: 'transparent' }}>
-        <Content style={{ padding: '0 18px 18px', maxWidth: 1180, width: '100%', margin: '0 auto' }}>
+        </Sider>
+      )}
+      <Layout
+        style={{
+          background: 'transparent',
+          marginRight: sidebarVisible ? 294 : 0,
+          transition: 'margin-right 0.2s ease',
+        }}
+      >
+        <Content style={{ padding: sidebarVisible ? '0 18px 18px' : '0 0 18px', maxWidth: 1180, width: '100%', margin: '0 auto' }}>
           <Card
             bordered={false}
             style={{
@@ -1323,11 +1387,35 @@ if (editingEmployee) {
               marginBottom: 16,
               border: `1px solid ${palette.border}`,
               boxShadow: '0 10px 24px rgba(41,66,49,0.07)',
+              position: 'sticky',
+              top: 14,
+              zIndex: 15,
             }}
             styles={{ body: { padding: '18px 20px' } }}
           >
             <Space style={{ width: '100%', justifyContent: 'space-between' }} align="center" wrap>
               <Space align="center" size={12}>
+                {!isMobile && (
+                  <Button
+                    type="text"
+                    onClick={() => setSidebarVisible((prev) => !prev)}
+                    icon={
+                      sidebarVisible ? (
+                        <MenuFoldOutlined style={{ color: palette.text }} />
+                      ) : (
+                        <MenuUnfoldOutlined style={{ color: palette.text }} />
+                      )
+                    }
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 13,
+                      border: `1px solid ${palette.border}`,
+                      background: '#fff',
+                    }}
+                    aria-label="إظهار أو إخفاء القائمة الجانبية"
+                  />
+                )}
                 <Avatar size={44} style={{ background: palette.accentSoft, color: palette.accent }} icon={sectionMeta[section].icon} />
                 <div>
                   <Title level={3} style={{ margin: 0, color: palette.text }}>
@@ -1346,6 +1434,32 @@ if (editingEmployee) {
           </div>
         </Content>
       </Layout>
+      {isMobile && (
+        <Button
+          type="text"
+          onClick={() => setSidebarVisible((prev) => !prev)}
+          icon={
+            sidebarVisible ? (
+              <MenuFoldOutlined style={{ color: '#fff' }} />
+            ) : (
+              <MenuUnfoldOutlined style={{ color: '#fff' }} />
+            )
+          }
+          style={{
+            position: 'fixed',
+            top: 20,
+            right: 20,
+            width: 44,
+            height: 44,
+            borderRadius: 14,
+            background: palette.accent,
+            border: 'none',
+            zIndex: 1200,
+            boxShadow: '0 8px 20px rgba(41,66,49,0.3)',
+          }}
+          aria-label="إظهار أو إخفاء القائمة الجانبية"
+        />
+      )}
     </Layout>
   );
 };

@@ -43,6 +43,7 @@ from models import (
     UserPublic,
 )
 from services.stripe_service import PLANS, company_settings_response, require_platform_admin
+from services.subscription_guard import require_active_subscription_for_client_writes
 from utils.helpers import normalize_city, normalize_neighborhood
 from utils.permissions import require_permission
 
@@ -135,9 +136,7 @@ async def update_marketing_lead_status_service(
     current_user: UserPublic,
 ) -> MarketingLeadPublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     updated = await update_marketing_lead_db(owner_id, lead_id, {"status": payload.status})
     if not updated:
         raise HTTPException(status_code=404, detail="Lead غير موجود.")
@@ -150,9 +149,7 @@ async def update_marketing_lead_service(
     current_user: UserPublic,
 ) -> MarketingLeadPublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
 
     update_data = payload.model_dump(exclude_unset=True)
     if "notes" in update_data and isinstance(update_data.get("notes"), str):
@@ -169,9 +166,7 @@ async def convert_marketing_lead_service(
     current_user: UserPublic,
 ) -> MarketingLeadPublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
 
     lead = await get_marketing_lead_by_id_db(owner_id, lead_id)
     if not lead:
@@ -342,7 +337,10 @@ async def platform_admin_subscription_action_service(
             raise HTTPException(status_code=400, detail="الخطة المحددة غير صالحة.")
     else:
         current_status = (company.get("billing_status") or "").strip()
-        next_status = current_status if current_status else "manual_extended"
+        if current_status.startswith("cancelled_by_") or current_status in {"expired", "trial_ended"}:
+            next_status = "manual_extended"
+        else:
+            next_status = current_status if current_status else "manual_extended"
 
     updated = await update_company_billing_from_stripe(
         owner_user_id,

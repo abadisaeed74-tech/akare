@@ -131,6 +131,10 @@ export interface CompanySettings {
   billing_status?: string | null;
   cancel_at_period_end?: boolean;
   trial_used?: boolean;
+  subscription_status?: 'active' | 'expired' | 'cancelled' | 'trialing' | null;
+  cancellation_reason?: string | null;
+  auto_renewal_enabled?: boolean | null;
+  subscription_end_date_gregorian?: string | null;
 }
 
 export interface TeamUser {
@@ -149,6 +153,11 @@ export interface SettingsOverview {
   plan_usage: PlanUsage;
   team: TeamUser[];
 }
+
+export const CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE =
+  'انتهى اشتراكك. يمكنك استعراض بياناتك الحالية فقط حتى يتم تجديد الاشتراك.';
+export const MATCHING_READ_ONLY_SUBSCRIPTION_MESSAGE =
+  'انتهى اشتراكك. نظام المطابقة متاح للعرض فقط بعد تجديد الاشتراك.';
 
 export interface PublicCompany {
   company_name?: string;
@@ -335,6 +344,10 @@ export interface PlatformOfficeSummary {
   trial_used: boolean;
   subscription_started_at?: string | null;
   subscription_ends_at?: string | null;
+  subscription_status?: 'active' | 'expired' | 'cancelled' | 'trialing' | null;
+  cancellation_reason?: string | null;
+  auto_renewal_enabled?: boolean | null;
+  subscription_end_date_gregorian?: string | null;
   total_properties: number;
   total_employees: number;
   created_at?: string | null;
@@ -480,6 +493,15 @@ export const platformAdminDeleteOffice = async (ownerUserId: string): Promise<vo
 export const getSettingsOverview = async (): Promise<SettingsOverview> => {
   const response = await apiClient.get('/settings/overview');
   return response.data;
+};
+
+export const getClientsReadOnlyMode = async (): Promise<boolean> => {
+  const overview = await getSettingsOverview();
+  const status = overview?.company?.subscription_status;
+  if (status) {
+    return !['active', 'trialing'].includes(status);
+  }
+  return !Boolean(overview?.company?.is_subscribed);
 };
 
 export const updateCompanySettings = async (

@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import os
 
 from fastapi import FastAPI
@@ -22,6 +24,7 @@ from routers import (
     settings,
     uploads,
 )
+from services.email_reminder_service import run_email_reminders_scheduler
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 ensure_stripe_env_or_raise()
@@ -31,6 +34,7 @@ app = FastAPI(
     description="API for managing and filtering real estate listings.",
     version="1.0.0",
 )
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,6 +55,29 @@ async def add_upload_security_headers(request: Request, call_next):
     return response
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+
+@app.on_event("startup")
+async def startup_email_scheduler() -> None:
+    app.state.email_scheduler_stop_event = asyncio.Event()
+    app.state.email_scheduler_task = asyncio.create_task(
+        run_email_reminders_scheduler(app.state.email_scheduler_stop_event)
+    )
+    logger.info("Email reminder scheduler task created")
+
+
+@app.on_event("shutdown")
+async def shutdown_email_scheduler() -> None:
+    stop_event = getattr(app.state, "email_scheduler_stop_event", None)
+    task = getattr(app.state, "email_scheduler_task", None)
+    if stop_event:
+        stop_event.set()
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 app.include_router(public.router)
 app.include_router(auth.router)

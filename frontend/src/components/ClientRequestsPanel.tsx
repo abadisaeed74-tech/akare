@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Avatar,
   Button,
   Card,
@@ -20,7 +21,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowUpOutlined, ArrowDownOutlined, DeleteOutlined, FileTextOutlined, SolutionOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
-import { getClientRequests, createClientRequest, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientRequest, updateClientProfile, deleteClientProfile, deleteClientRequest, getClientRequestsStats, type ClientRequest, type ClientProfile, type TeamUser, type UserPublic } from '../services/api';
+import { CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE, getClientsReadOnlyMode, getClientRequests, createClientRequest, createClientProfile, getClientProfilesByType, getTeamUsers, updateClientRequest, updateClientProfile, deleteClientProfile, deleteClientRequest, getClientRequestsStats, type ClientRequest, type ClientProfile, type TeamUser, type UserPublic } from '../services/api';
 import { formatRelativeActivityAr, maxUtcIso, parseBackendUtcMs } from '../utils/relativeActivityAr';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -149,6 +150,7 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
   const [assignmentTarget, setAssignmentTarget] = useState<ClientDataType | null>(null);
   const [deletingClientMap, setDeletingClientMap] = useState<Record<string, boolean>>({});
+  const [clientsReadOnly, setClientsReadOnly] = useState(false);
   const canAssignEmployee = currentUser?.role === 'owner' || currentUser?.role === 'manager';
   // Real stats from API
   const [requestsStats, setRequestsStats] = useState<{ total_requests: number; active_requests: number; new_requests: number; new_last_30_days: number; percentage_change: number; active_percentage_change: number; new_percentage_change: number } | null>(null);
@@ -157,21 +159,27 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
     try {
       // Load client requests + profiles with "request" type (for Requests tab)
       // Also load stats from API for real percentage changes
-      const [rawRequestsData, requestProfilesData, teamUsersData, statsData] = await Promise.all([
+      const [rawRequestsData, requestProfilesData, teamUsersData, statsData, readOnlyMode] = await Promise.all([
         getClientRequests(),
         getClientProfilesByType('request'),  // Get profiles with request type
         getTeamUsers().catch(() => [] as TeamUser[]),
         getClientRequestsStats().catch(() => null),
+        getClientsReadOnlyMode().catch(() => false),
       ]);
       setTeamUsers(teamUsersData.filter((user) => user.status === 'active'));
       setClients(mergeProfilesWithRequests(requestProfilesData, rawRequestsData));
       setRequestsStats(statsData);
+      setClientsReadOnly(readOnlyMode);
     } catch {
       message.error('تعذر تحميل الطلبات.');
     }
   };
 
   const handleAssignEmployee = async (requestId: string, userId: string | null) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     const selectedUser = teamUsers.find((user) => user.id === userId);
     setAssigningMap((prev) => ({ ...prev, [requestId]: true }));
     try {
@@ -189,6 +197,10 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
   };
 
   const handleDeleteClientRequests = async (record: ClientDataType) => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     setDeletingClientMap((prev) => ({ ...prev, [record.profileId]: true }));
     try {
       await Promise.all(record.requests.map((request) => deleteClientRequest(request.id)));
@@ -221,6 +233,10 @@ const ClientRequestsPanel: React.FC<Props> = ({ loading = false, currentUser }) 
   }, [clients, assignmentTarget]);
 
 const handleAddClient = async () => {
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       const values = await form.validateFields();
       setAdding(true);
@@ -363,7 +379,7 @@ const stats = useMemo(() => {
             <Button
               size="small"
               onClick={() => openAssignmentModal(record)}
-              disabled={record.requests.length === 0}
+              disabled={clientsReadOnly || record.requests.length === 0}
             >
               تعيين الموظف
             </Button>
@@ -390,6 +406,7 @@ const stats = useMemo(() => {
           cancelText="إلغاء"
           okButtonProps={{ danger: true }}
           onConfirm={() => handleDeleteClientRequests(record)}
+          disabled={clientsReadOnly}
         >
           <Button
             size="small"
@@ -397,6 +414,7 @@ const stats = useMemo(() => {
             danger
             icon={<DeleteOutlined />}
             loading={!!deletingClientMap[record.profileId]}
+            disabled={clientsReadOnly}
           />
         </Popconfirm>
       ),
@@ -418,6 +436,11 @@ const stats = useMemo(() => {
       }}
     >
       <Row gutter={[12, 12]}>
+        {clientsReadOnly && (
+          <Col span={24}>
+            <Alert showIcon type="warning" message={CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE} />
+          </Col>
+        )}
         <Col xs={24} sm={12} lg={8}>
           <Card size="small" styles={{ body: { padding: 12 } }}>
 <Statistic
@@ -483,6 +506,7 @@ const stats = useMemo(() => {
             type="primary" 
             size="small"
             onClick={() => setAddModalOpen(true)}
+            disabled={clientsReadOnly}
           >
             + إضافة عميل
           </Button>
@@ -526,6 +550,7 @@ const stats = useMemo(() => {
                               placeholder="اختر موظف"
                               value={request.assignedUserId || undefined}
                               loading={!!assigningMap[request.id]}
+                              disabled={clientsReadOnly}
                               style={{ minWidth: 170 }}
                               onChange={(value) => handleAssignEmployee(request.id, value || null)}
                               options={teamUsers.map((user) => ({
@@ -638,6 +663,7 @@ const stats = useMemo(() => {
                     placeholder="اختر الموظف المسؤول عن هذا الطلب"
                     value={request.assignedUserId || undefined}
                     loading={!!assigningMap[request.id]}
+                    disabled={clientsReadOnly}
                     onChange={async (value) => {
                       await handleAssignEmployee(request.id, value || null);
                     }}

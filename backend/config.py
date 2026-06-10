@@ -16,6 +16,15 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173").rstrip("/")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
+BREVO_FROM_EMAIL = os.getenv("BREVO_FROM_EMAIL", "").strip()
+BREVO_FROM_NAME = os.getenv("BREVO_FROM_NAME", "Akare").strip() or "Akare"
+BREVO_ENABLED = bool(BREVO_API_KEY and BREVO_FROM_EMAIL)
+
+try:
+    EMAIL_REMINDER_SCHEDULER_SECONDS = int(os.getenv("EMAIL_REMINDER_SCHEDULER_SECONDS", "60"))
+except ValueError:
+    EMAIL_REMINDER_SCHEDULER_SECONDS = 60
 
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY", "").strip()

@@ -1,5 +1,4 @@
 import re
-from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import HTTPException
@@ -22,11 +21,11 @@ from database import (
     get_or_create_company_for_owner,
     get_properties,
     get_property_by_id,
-    update_company_billing_from_stripe,
     update_property_db,
 )
 from models import Property, PropertyInput, PropertyUpdate, UserPublic
 from services.notification_service import create_owner_team_notification
+from services.stripe_service import refresh_trial_subscription_state
 from utils.helpers import (
     normalize_city,
     normalize_external_url,
@@ -68,33 +67,6 @@ PLANS: Dict[str, Dict] = {
 
 def get_plan(key: str) -> Dict:
     return PLANS.get(key, PLANS["starter"])
-
-
-async def refresh_trial_subscription_state(owner_user_id: str) -> Dict:
-    company = await get_or_create_company_for_owner(owner_user_id)
-    if not company.get("is_subscribed", False):
-        return company
-    auto_expiring_statuses = {"trialing", "manual_free", "manual_extended"}
-    if company.get("billing_status") not in auto_expiring_statuses:
-        return company
-    ends_at = company.get("subscription_ends_at")
-    if not ends_at:
-        return company
-    if isinstance(ends_at, str):
-        try:
-            ends_at = datetime.fromisoformat(ends_at.replace("Z", "+00:00")).replace(tzinfo=None)
-        except Exception:
-            return company
-    if isinstance(ends_at, datetime) and ends_at <= datetime.utcnow():
-        updated = await update_company_billing_from_stripe(
-            owner_user_id,
-            billing_status="trial_ended",
-            is_subscribed=False,
-            cancel_at_period_end=False,
-        )
-        if updated:
-            return updated
-    return company
 
 
 async def can_view_company_properties(owner_user_id: Optional[str]) -> bool:

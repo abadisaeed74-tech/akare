@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Avatar,
   Button,
   Card,
@@ -50,7 +51,9 @@ import {
   deleteClientNote,
   getClientOfferNotes,
   createClientOfferNote,
+  CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE,
   deleteClientOfferNote,
+  getClientsReadOnlyMode,
   getCurrentUser,
   type Appointment,
   type ClientNote,
@@ -144,17 +147,20 @@ const [activeTab, setActiveTab] = useState<AppointmentTab>('all');
   const [notes, setNotes] = useState<ClientNote[]>([]);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [currentUser, setCurrentUser] = useState<UserPublic | null>(null);
+  const [clientsReadOnly, setClientsReadOnly] = useState(false);
   const canSeeAssignedEmployee = currentUser?.role === 'owner' || currentUser?.role === 'manager';
 
 useEffect(() => {
     const loadAppointments = async () => {
       setLoading(true);
       try {
-        const [data, user] = await Promise.all([
+        const [data, user, readOnlyMode] = await Promise.all([
           getAppointments(),
           getCurrentUser().catch(() => null),
+          getClientsReadOnlyMode().catch(() => false),
         ]);
         setCurrentUser(user);
+        setClientsReadOnly(readOnlyMode);
         // Sort by deadline ascending (filter out null)
         const sorted = data
           .filter((a) => a.deadline_at)
@@ -282,6 +288,10 @@ useEffect(() => {
   // Save reminder
   const saveReminder = async () => {
     if (!editingReminder) return;
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       const values = await reminderForm.validateFields();
       if (editingReminder.source_type === 'request') {
@@ -353,6 +363,10 @@ useEffect(() => {
 
   const addQuickNote = async () => {
     if (!selectedAppointment) return;
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     const content = newNoteContent.trim();
     if (!content) {
       message.warning('اكتب نص الملاحظة أولاً.');
@@ -378,6 +392,10 @@ useEffect(() => {
 
   const removeNote = async (noteId: string) => {
     if (!selectedAppointment) return;
+    if (clientsReadOnly) {
+      message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+      return;
+    }
     try {
       if (selectedAppointment.source_type === 'request') {
         await deleteClientNote(selectedAppointment.id, noteId);
@@ -657,8 +675,13 @@ useEffect(() => {
                     shape="circle"
                     icon={<CheckOutlined />}
                     title={appt.source_type === 'request' ? 'إكمال الموعد' : 'إكمال متابعة'}
+                    disabled={clientsReadOnly}
 onClick={async (e) => {
                       e.stopPropagation();
+                      if (clientsReadOnly) {
+                        message.warning(CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE);
+                        return;
+                      }
                       try {
                         if (appt.source_type === 'request') {
                           await updateClientRequest(appt.id, {
@@ -697,6 +720,7 @@ onClick={async (e) => {
                       e.stopPropagation();
                       openNotesModal(appt);
                     }}
+                    disabled={clientsReadOnly}
                   />
 <Button
                     size="small"
@@ -707,6 +731,7 @@ onClick={async (e) => {
                       e.stopPropagation();
                       openReminderModal(appt);
                     }}
+                    disabled={clientsReadOnly}
                   />
                 </Space>
               </Col>
@@ -723,6 +748,11 @@ onClick={async (e) => {
       <Paragraph type="secondary">
         جميع مواعيدك ومتابعاتك القادمة للعملاء المسؤول عنهم فقط.
       </Paragraph>
+      {clientsReadOnly && (
+        <Card style={{ marginBottom: 16 }}>
+          <Alert showIcon type="warning" message={CLIENTS_READ_ONLY_SUBSCRIPTION_MESSAGE} />
+        </Card>
+      )}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} md={6}>
@@ -844,6 +874,7 @@ onClick={async (e) => {
           setEditingReminder(null);
         }}
         onOk={saveReminder}
+        okButtonProps={{ disabled: clientsReadOnly }}
         okText="حفظ"
         cancelText="إلغاء"
         style={{ direction: 'rtl' }}
@@ -900,7 +931,7 @@ onClick={async (e) => {
             placeholder="اكتب ملاحظة سريعة..."
             style={{ textAlign: 'right', direction: 'rtl' }}
           />
-          <Button type="primary" loading={notesSaving} onClick={addQuickNote}>
+          <Button type="primary" loading={notesSaving} onClick={addQuickNote} disabled={clientsReadOnly}>
             إضافة ملاحظة
           </Button>
           <div style={{ display: 'grid', gap: 8, maxHeight: 320, overflowY: 'auto' }}>
@@ -923,6 +954,7 @@ onClick={async (e) => {
                       danger
                       icon={<DeleteOutlined />}
                       onClick={() => removeNote(note.id)}
+                    disabled={clientsReadOnly}
                     />
                   </div>
                 </Card>

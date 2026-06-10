@@ -148,6 +148,10 @@ class CompanySettings(BaseModel):
     billing_status: Optional[str] = None
     cancel_at_period_end: bool = False
     trial_used: bool = False
+    subscription_status: Optional[str] = None
+    cancellation_reason: Optional[str] = None
+    auto_renewal_enabled: Optional[bool] = None
+    subscription_end_date_gregorian: Optional[str] = None
 
 
 class CompanySettingsUpdate(BaseModel):
@@ -269,6 +273,10 @@ class PlatformOfficeSummary(BaseModel):
     trial_used: bool = False
     subscription_started_at: Optional[datetime] = None
     subscription_ends_at: Optional[datetime] = None
+    subscription_status: Optional[str] = None
+    cancellation_reason: Optional[str] = None
+    auto_renewal_enabled: Optional[bool] = None
+    subscription_end_date_gregorian: Optional[str] = None
     total_properties: int = 0
     total_employees: int = 0
     created_at: Optional[datetime] = None

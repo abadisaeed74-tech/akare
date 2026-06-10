@@ -1,8 +1,10 @@
 import re
+import logging
 from typing import Dict, List
 
 from fastapi import HTTPException
 
+from config import FRONTEND_BASE_URL
 from database import (
     count_assigned_clients_for_user,
     count_assigned_properties_for_user,
@@ -12,6 +14,7 @@ from database import (
     get_or_create_company_for_owner,
     get_team_for_owner,
     get_user_by_email,
+    get_user_by_id,
     set_company_subdomain_db,
     update_company_settings_db,
     update_employee_user,
@@ -31,9 +34,12 @@ from models import (
     UserPublic,
 )
 from services.property_service import get_plan
+from services.email_service import is_brevo_configured, send_email
 from services.notification_service import create_owner_team_notification
 from services.stripe_service import PLANS, company_settings_response, refresh_trial_subscription_state
 from utils.security import get_password_hash
+
+logger = logging.getLogger(__name__)
 
 
 async def get_settings_overview_service(current_user: UserPublic) -> SettingsOverview:
@@ -71,20 +77,7 @@ async def get_settings_overview_service(current_user: UserPublic) -> SettingsOve
         used_storage_mb=None,
     )
 
-    company_settings = CompanySettings(
-        company_name=company.get("company_name"),
-        logo_url=company.get("logo_url"),
-        official_email=company.get("official_email"),
-        contact_phone=company.get("contact_phone"),
-        subdomain=company.get("subdomain"),
-        plan_key=company.get("plan_key", "starter"),
-        is_subscribed=company.get("is_subscribed", False),
-        subscription_started_at=company.get("subscription_started_at"),
-        subscription_ends_at=company.get("subscription_ends_at"),
-        billing_status=company.get("billing_status"),
-        cancel_at_period_end=company.get("cancel_at_period_end", False),
-        trial_used=company.get("trial_used", False),
-    )
+    company_settings = company_settings_response(company)
     return SettingsOverview(company=company_settings, plan_usage=plan_usage, team=team)
 
 
@@ -244,12 +237,36 @@ async def create_team_user_service(data: EmployeeCreate, current_user: UserPubli
         link="/settings?section=users",
         metadata={"user_id": created_user.id},
     )
+    if is_brevo_configured():
+        try:
+            company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+            login_url = f"{FRONTEND_BASE_URL}/auth"
+            owner_name = (current_user.display_name or current_user.email or "مالك الحساب").strip()
+            subject = f"مرحبًا بك في منصة Akare - {company_name}"
+            body = (
+                f"مرحبًا {created_user.display_name or created_user.email}،\n\n"
+                f"تمت إضافتك بنجاح إلى فريق {company_name}.\n"
+                f"- يمكنك تسجيل الدخول من خلال: {login_url}\n"
+                f"- البريد الإلكتروني للحساب: {created_user.email}\n"
+                "- كلمة المرور الخاصة بحسابك محفوظة لدى مالك المكتب.\n"
+                f"- للتواصل بشأن بيانات الدخول: {owner_name}\n\n"
+                "أهلًا بك معنا,\n"
+                "Akare"
+            )
+            await send_email(
+                to_email=created_user.email,
+                subject=subject,
+                plain_text=body,
+            )
+        except Exception:
+            logger.exception("Failed sending onboarding email to new employee")
     return created_user
 
 
 async def update_team_user_service(user_id: str, data: EmployeeUpdate, current_user: UserPublic) -> TeamUserPublic:
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="فقط مالك الحساب يمكنه إدارة الموظفين.")
+    before_user = await get_user_by_id(user_id)
     updates: Dict[str, object] = {}
     if data.status is not None:
         if data.status not in {"active", "disabled"}:
@@ -284,4 +301,45 @@ async def update_team_user_service(user_id: str, data: EmployeeUpdate, current_u
             link="/settings?section=users",
             metadata={"user_id": team_user.id},
         )
+    if (
+        is_brevo_configured()
+        and before_user
+        and str(before_user.get("status") or "").lower() != "disabled"
+        and str(team_user.status or "").lower() == "disabled"
+    ):
+        try:
+            company = await get_or_create_company_for_owner(current_user.id)
+            company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+            subject = f"تم تعطيل حسابك في {company_name}"
+            body = (
+                "مرحبًا،\n\n"
+                f"تم تعطيل حسابك في {company_name} بواسطة إدارة المكتب.\n"
+                "إذا كنت تعتقد أن هذا الإجراء بالخطأ، تواصل مع مالك المكتب.\n\n"
+                "تحياتنا,\n"
+                "Akare"
+            )
+            await send_email(to_email=team_user.email, subject=subject, plain_text=body)
+        except Exception:
+            logger.exception("Failed sending disabled-account email")
+    if (
+        is_brevo_configured()
+        and before_user
+        and str(before_user.get("status") or "").lower() == "disabled"
+        and str(team_user.status or "").lower() == "active"
+    ):
+        try:
+            company = await get_or_create_company_for_owner(current_user.id)
+            company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+            login_url = f"{FRONTEND_BASE_URL}/auth"
+            subject = f"تمت إعادة تفعيل حسابك في {company_name}"
+            body = (
+                "مرحبًا،\n\n"
+                f"تمت إعادة تفعيل حسابك في {company_name}، ويمكنك الآن تسجيل الدخول مرة أخرى.\n"
+                f"- رابط تسجيل الدخول: {login_url}\n\n"
+                "تحياتنا,\n"
+                "Akare"
+            )
+            await send_email(to_email=team_user.email, subject=subject, plain_text=body)
+        except Exception:
+            logger.exception("Failed sending reactivated-account email")
     return team_user

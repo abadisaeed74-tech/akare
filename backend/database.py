@@ -11,6 +11,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import ReturnDocument
 from models import Property, UserPublic
+from services.subscription_state import derive_subscription_snapshot
 from utils.permissions import (
     DEFAULT_EMPLOYEE_PERMISSIONS,
     MANAGER_DEFAULT_PERMISSIONS,
@@ -612,6 +613,7 @@ def company_helper(company: Dict[str, Any]) -> dict:
     if not company:
         return {}
     _id = company.get("_id")
+    snapshot = derive_subscription_snapshot(company)
     return {
         "id": str(_id) if _id is not None else None,
         "owner_user_id": company.get("owner_user_id"),
@@ -621,14 +623,24 @@ def company_helper(company: Dict[str, Any]) -> dict:
         "contact_phone": company.get("contact_phone"),
         "subdomain": company.get("subdomain"),
         "plan_key": company.get("plan_key", "starter"),
-        "is_subscribed": company.get("is_subscribed", False),
+        "is_subscribed": bool(snapshot.get("effective_is_subscribed", company.get("is_subscribed", False))),
         "subscription_started_at": company.get("subscription_started_at"),
         "subscription_ends_at": company.get("subscription_ends_at"),
         "billing_status": company.get("billing_status"),
         "cancel_at_period_end": company.get("cancel_at_period_end", False),
         "trial_used": company.get("trial_used", False),
+        "subscription_status": snapshot.get("subscription_status"),
+        "cancellation_reason": snapshot.get("cancellation_reason"),
+        "auto_renewal_enabled": snapshot.get("auto_renewal_enabled"),
+        "subscription_end_date_gregorian": snapshot.get("subscription_end_date_gregorian"),
         "stripe_customer_id": company.get("stripe_customer_id"),
         "stripe_subscription_id": company.get("stripe_subscription_id"),
+        "appointment_reminder_email_cc_owner": company.get("appointment_reminder_email_cc_owner", True),
+        "subscription_reminder_7d_sent": company.get("subscription_reminder_7d_sent", False),
+        "subscription_reminder_3d_sent": company.get("subscription_reminder_3d_sent", False),
+        "subscription_reminder_1d_sent": company.get("subscription_reminder_1d_sent", False),
+        "subscription_reminder_0d_sent": company.get("subscription_reminder_0d_sent", False),
+        "subscription_expired_sent": company.get("subscription_expired_sent", False),
         "created_at": company.get("created_at"),
         "updated_at": company.get("updated_at"),
     }
@@ -665,6 +677,12 @@ async def get_or_create_company_for_owner(owner_user_id: str) -> dict:
         "trial_used": False,
         "stripe_customer_id": None,
         "stripe_subscription_id": None,
+        "appointment_reminder_email_cc_owner": True,
+        "subscription_reminder_7d_sent": False,
+        "subscription_reminder_3d_sent": False,
+        "subscription_reminder_1d_sent": False,
+        "subscription_reminder_0d_sent": False,
+        "subscription_expired_sent": False,
         "created_at": now,
         "updated_at": now,
     }
@@ -710,6 +728,11 @@ async def set_company_plan_db(owner_user_id: str, plan_key: str) -> Optional[dic
                 "subscription_ends_at": ends_at,
                 "billing_status": "active",
                 "cancel_at_period_end": False,
+                "subscription_reminder_7d_sent": False,
+                "subscription_reminder_3d_sent": False,
+                "subscription_reminder_1d_sent": False,
+                "subscription_reminder_0d_sent": False,
+                "subscription_expired_sent": False,
                 "updated_at": now,
             }
         },
@@ -745,6 +768,11 @@ async def start_company_free_trial_db(
                 "billing_status": "trialing",
                 "cancel_at_period_end": True,
                 "trial_used": True,
+                "subscription_reminder_7d_sent": False,
+                "subscription_reminder_3d_sent": False,
+                "subscription_reminder_1d_sent": False,
+                "subscription_reminder_0d_sent": False,
+                "subscription_expired_sent": False,
                 "updated_at": now,
             }
         },
@@ -817,6 +845,25 @@ async def update_company_billing_from_stripe(
         update_doc["subscription_started_at"] = subscription_started_at
     if subscription_ends_at is not None:
         update_doc["subscription_ends_at"] = subscription_ends_at
+
+    current_end = company.get("subscription_ends_at")
+    should_reset_subscription_email_flags = False
+    if subscription_ends_at is not None and subscription_ends_at != current_end:
+        should_reset_subscription_email_flags = True
+    if is_subscribed is True and not bool(company.get("is_subscribed", False)):
+        should_reset_subscription_email_flags = True
+
+    # Reset reminder flags only when a new subscription cycle actually starts/changes.
+    if should_reset_subscription_email_flags:
+        update_doc.update(
+            {
+                "subscription_reminder_7d_sent": False,
+                "subscription_reminder_3d_sent": False,
+                "subscription_reminder_1d_sent": False,
+                "subscription_reminder_0d_sent": False,
+                "subscription_expired_sent": False,
+            }
+        )
 
     updated = await company_collection.find_one_and_update(
         {"_id": ObjectId(company["id"])},
@@ -952,6 +999,10 @@ async def get_platform_offices_overview_db(limit: int = 500) -> List[Dict[str, A
                 "trial_used": bool(company.get("trial_used", False)),
                 "subscription_started_at": company.get("subscription_started_at"),
                 "subscription_ends_at": company.get("subscription_ends_at"),
+                "subscription_status": company.get("subscription_status"),
+                "cancellation_reason": company.get("cancellation_reason"),
+                "auto_renewal_enabled": company.get("auto_renewal_enabled"),
+                "subscription_end_date_gregorian": company.get("subscription_end_date_gregorian"),
                 "total_properties": int(total_properties),
                 "total_employees": int(total_employees),
                 "created_at": company.get("created_at"),
@@ -1023,6 +1074,10 @@ async def get_platform_office_detail_db(owner_user_id: str, properties_limit: in
         "trial_used": bool(company.get("trial_used", False)),
         "subscription_started_at": company.get("subscription_started_at"),
         "subscription_ends_at": company.get("subscription_ends_at"),
+        "subscription_status": company.get("subscription_status"),
+        "cancellation_reason": company.get("cancellation_reason"),
+        "auto_renewal_enabled": company.get("auto_renewal_enabled"),
+        "subscription_end_date_gregorian": company.get("subscription_end_date_gregorian"),
         "total_properties": int(total_properties),
         "total_employees": len(employees),
         "created_at": company.get("created_at"),

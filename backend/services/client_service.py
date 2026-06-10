@@ -1,5 +1,8 @@
+import logging
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
@@ -29,6 +32,8 @@ from database import (
     get_client_requests_db,
     get_client_requests_stats_db,
     get_or_create_client_profile_with_type_db,
+    get_or_create_company_for_owner,
+    get_team_for_owner,
     get_properties,
     get_user_by_id,
     get_property_by_id,
@@ -55,8 +60,16 @@ from models import (
     UserPublic,
 )
 from services.notification_service import create_notification, create_owner_team_notification
+from services.email_service import is_brevo_configured, send_email
+from services.subscription_guard import (
+    require_active_subscription_for_client_writes,
+    require_active_subscription_for_matching,
+)
 from utils.helpers import normalize_city, normalize_neighborhood
 from utils.permissions import has_permission, require_permission
+
+logger = logging.getLogger(__name__)
+RIYADH_TZ = ZoneInfo("Asia/Riyadh")
 
 
 def _owner_id(current_user: UserPublic) -> Optional[str]:
@@ -176,6 +189,239 @@ async def _ensure_offer_assignment(
 def _to_int_or_none(v):
     if v in (None, ""):
         return None
+
+
+def _activity_label(reminder_type: Optional[str]) -> str:
+    if reminder_type == "viewing":
+        return "معاينة"
+    if reminder_type == "follow_up":
+        return "متابعة"
+    return "موعد"
+
+
+def _format_riyadh_date_time(dt: datetime) -> tuple[str, str]:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    r = dt.astimezone(RIYADH_TZ)
+    return r.strftime("%Y-%m-%d"), r.strftime("%I:%M %p")
+
+
+async def _send_assignment_email_if_needed(
+    *,
+    owner_id: str,
+    current_user: UserPublic,
+    assignee_id: Optional[str],
+    client_name: Optional[str],
+    source_label: str,
+) -> None:
+    if current_user.role not in {"owner", "manager"}:
+        return
+    if not is_brevo_configured():
+        return
+    if not assignee_id or assignee_id == current_user.id:
+        return
+    try:
+        assignee_user = await get_user_by_id(assignee_id)
+        assignee_email = (assignee_user or {}).get("email")
+        if not assignee_email:
+            return
+        company = await get_or_create_company_for_owner(owner_id)
+        company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+        actor_name = (current_user.display_name or current_user.email or "إدارة المكتب").strip()
+        safe_client_name = (client_name or "عميل جديد").strip() or "عميل جديد"
+        subject = f"تم تعيينك مسؤولًا عن {safe_client_name}"
+        body = (
+            "مرحبًا،\n\n"
+            f"تم تعيينك كموظف مسؤول عن {source_label} للعميل: {safe_client_name}.\n"
+            f"- المكتب: {company_name}\n"
+            f"- بواسطة: {actor_name}\n\n"
+            "يمكنك مراجعة التفاصيل من داخل المنصة.\n\n"
+            "تحياتنا,\n"
+            "Akare"
+        )
+        await send_email(to_email=assignee_email, subject=subject, plain_text=body)
+    except Exception:
+        logger.exception("Failed sending assignment email")
+
+
+async def _send_unassignment_email_if_needed(
+    *,
+    owner_id: str,
+    current_user: UserPublic,
+    assignee_id: Optional[str],
+    client_name: Optional[str],
+    source_label: str,
+) -> None:
+    if current_user.role not in {"owner", "manager"}:
+        return
+    if not is_brevo_configured():
+        return
+    if not assignee_id or assignee_id == current_user.id:
+        return
+    try:
+        assignee_user = await get_user_by_id(assignee_id)
+        assignee_email = (assignee_user or {}).get("email")
+        if not assignee_email:
+            return
+        company = await get_or_create_company_for_owner(owner_id)
+        company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+        actor_name = (current_user.display_name or current_user.email or "إدارة المكتب").strip()
+        safe_client_name = (client_name or "عميل").strip() or "عميل"
+        subject = f"تم تحديث مسؤولية {safe_client_name}"
+        body = (
+            "مرحبًا،\n\n"
+            f"تم إلغاء تعيينك من {source_label} الخاص بالعميل: {safe_client_name}.\n"
+            f"- المكتب: {company_name}\n"
+            f"- بواسطة: {actor_name}\n\n"
+            "إذا كان هذا التحديث غير متوقع، تواصل مع إدارة المكتب.\n\n"
+            "تحياتنا,\n"
+            "Akare"
+        )
+        await send_email(to_email=assignee_email, subject=subject, plain_text=body)
+    except Exception:
+        logger.exception("Failed sending unassignment email")
+
+
+async def _send_closed_status_email_if_needed(
+    *,
+    owner_id: str,
+    current_user: UserPublic,
+    previous_status: Optional[str],
+    new_status: Optional[str],
+    client_name: Optional[str],
+    source_label: str,
+) -> None:
+    if not is_brevo_configured():
+        return
+    if str(previous_status or "").strip().lower() == "closed":
+        return
+    if str(new_status or "").strip().lower() != "closed":
+        return
+    try:
+        owner_user = await get_user_by_id(owner_id)
+        owner_email = (owner_user or {}).get("email")
+        team = await get_team_for_owner(owner_id)
+        manager_emails = [
+            str(u.get("email") or "").strip()
+            for u in team
+            if u.get("role") == "manager" and u.get("status", "active") == "active"
+        ]
+        if not owner_email and not manager_emails:
+            return
+        to_email = owner_email or manager_emails[0]
+        cc_emails = [e for e in manager_emails if e and e != to_email]
+        actor_name = (current_user.display_name or current_user.email or "أحد أعضاء الفريق").strip()
+        safe_client_name = (client_name or "عميل").strip() or "عميل"
+        subject = f"تم إغلاق {source_label} - {safe_client_name}"
+        body = (
+            "مرحبًا،\n\n"
+            f"تم تغيير حالة {source_label} إلى مغلق للعميل: {safe_client_name}.\n"
+            f"- بواسطة: {actor_name}\n\n"
+            "تحياتنا,\n"
+            "Akare"
+        )
+        await send_email(
+            to_email=to_email,
+            cc_emails=cc_emails,
+            subject=subject,
+            plain_text=body,
+        )
+    except Exception:
+        logger.exception("Failed sending closed-status email")
+
+
+async def _send_appointment_confirmation_email_if_needed(
+    *,
+    owner_id: str,
+    current_user: UserPublic,
+    item: Dict[str, Any],
+    source_label: str,
+) -> None:
+    if current_user.role != "employee":
+        return
+    if not is_brevo_configured():
+        return
+    if not current_user.email:
+        return
+    deadline_at = item.get("deadline_at")
+    if not isinstance(deadline_at, datetime):
+        return
+    try:
+        reminder_before = int(item.get("reminder_before_minutes", 120) or 120)
+    except Exception:
+        reminder_before = 120
+    reminder_type = _activity_label(item.get("reminder_type"))
+    date_str, time_str = _format_riyadh_date_time(deadline_at)
+    company = await get_or_create_company_for_owner(owner_id)
+    company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+    client_name = (item.get("client_name") or "غير محدد").strip() or "غير محدد"
+    subject = f"تأكيد تسجيل {reminder_type} - {client_name}"
+    body = (
+        "مرحبًا،\n\n"
+        f"تم تسجيل {reminder_type} بنجاح للعميل: {client_name} ({source_label}).\n"
+        f"- المكتب: {company_name}\n"
+        f"- التاريخ: {date_str}\n"
+        f"- الوقت: {time_str} (Asia/Riyadh)\n"
+        f"- سيتم تذكيرك قبل الموعد بـ {reminder_before} دقيقة.\n\n"
+        "تحياتنا,\n"
+        "Akare"
+    )
+    try:
+        await send_email(to_email=current_user.email, subject=subject, plain_text=body)
+    except Exception:
+        logger.exception("Failed sending appointment confirmation email")
+
+
+async def _send_rescheduled_email_if_needed(
+    *,
+    owner_id: str,
+    current_user: UserPublic,
+    previous_item: Dict[str, Any],
+    updated_item: Dict[str, Any],
+    source_label: str,
+) -> None:
+    if not is_brevo_configured():
+        return
+    previous_deadline = previous_item.get("deadline_at")
+    updated_deadline = updated_item.get("deadline_at")
+    if not isinstance(previous_deadline, datetime) or not isinstance(updated_deadline, datetime):
+        return
+    if previous_deadline == updated_deadline:
+        return
+
+    assignee_id = str(updated_item.get("assigned_user_id") or "").strip()
+    if not assignee_id:
+        return
+    assignee_user = await get_user_by_id(assignee_id)
+    assignee_email = (assignee_user or {}).get("email")
+    if not assignee_email:
+        return
+
+    old_date, old_time = _format_riyadh_date_time(previous_deadline)
+    new_date, new_time = _format_riyadh_date_time(updated_deadline)
+    reminder_before = int(updated_item.get("reminder_before_minutes", 120) or 120)
+    reminder_type = _activity_label(updated_item.get("reminder_type"))
+    company = await get_or_create_company_for_owner(owner_id)
+    company_name = (company.get("company_name") or "مكتبك العقاري").strip() or "مكتبك العقاري"
+    actor_name = (current_user.display_name or current_user.email or "أحد أعضاء الفريق").strip()
+    client_name = (updated_item.get("client_name") or "غير محدد").strip() or "غير محدد"
+
+    subject = f"إعادة جدولة {reminder_type} - {client_name}"
+    body = (
+        "مرحبًا،\n\n"
+        f"تمت إعادة جدولة {reminder_type} للعميل: {client_name} ({source_label}).\n"
+        f"- المكتب: {company_name}\n"
+        f"- بواسطة: {actor_name}\n"
+        f"- الموعد السابق: {old_date} {old_time} (Asia/Riyadh)\n"
+        f"- الموعد الجديد: {new_date} {new_time} (Asia/Riyadh)\n"
+        f"- سيتم تذكيرك قبل الموعد بـ {reminder_before} دقيقة.\n\n"
+        "تحياتنا,\n"
+        "Akare"
+    )
+    try:
+        await send_email(to_email=assignee_email, subject=subject, plain_text=body)
+    except Exception:
+        logger.exception("Failed sending rescheduled-appointment email")
     try:
         return int(float(v))
     except Exception:
@@ -184,9 +430,7 @@ def _to_int_or_none(v):
 
 async def create_client_request_service(payload: ClientRequestInput, current_user: UserPublic) -> ClientRequestPublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
 
     text = (payload.raw_text or "").strip()
     if not text:
@@ -233,6 +477,13 @@ async def create_client_request_service(payload: ClientRequestInput, current_use
         "status": "new",
     }
     created = await create_client_request_db(owner_id, doc)
+    await _send_assignment_email_if_needed(
+        owner_id=owner_id,
+        current_user=current_user,
+        assignee_id=created.get("assigned_user_id"),
+        client_name=created.get("client_name"),
+        source_label="طلب العميل",
+    )
     await create_owner_team_notification(
         owner_id=owner_id,
         type="client_request_created",
@@ -259,9 +510,7 @@ async def list_client_requests_service(current_user: UserPublic) -> List[ClientR
 
 
 async def get_client_request_matches_service(request_id: str, current_user: UserPublic) -> List[Property]:
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        return []
+    owner_id = await require_active_subscription_for_matching(current_user)
     request_item = await get_client_request_by_id_db(owner_id, request_id)
     if not request_item:
         raise HTTPException(status_code=404, detail="الطلب غير موجود.")
@@ -365,9 +614,7 @@ async def create_client_request_note_service(
     current_user: UserPublic,
 ) -> ClientNotePublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     request_item = await get_client_request_by_id_db(owner_id, request_id)
     if not request_item:
         raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
@@ -434,9 +681,7 @@ async def update_client_request_note_service(
     current_user: UserPublic,
 ) -> ClientNotePublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     request_item = await get_client_request_by_id_db(owner_id, request_id)
     if not request_item:
         raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
@@ -452,9 +697,7 @@ async def update_client_request_note_service(
 
 async def delete_client_request_note_service(request_id: str, note_id: str, current_user: UserPublic) -> None:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     request_item = await get_client_request_by_id_db(owner_id, request_id)
     if not request_item:
         raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
@@ -474,9 +717,7 @@ async def update_client_request_service(
     current_user: UserPublic,
 ) -> ClientRequestPublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     current_item = await get_client_request_by_id_db(owner_id, request_id)
     if not current_item:
         raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
@@ -484,9 +725,17 @@ async def update_client_request_service(
     if not _is_visible_item(current_item, current_user):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية الوصول إلى هذا العميل.")
     updates = payload.model_dump(exclude_unset=True)
-    if ("assigned_user_id" in updates or "assigned_user_name" in updates) and not has_permission(current_user, "can_change_assignee"):
+    appointment_fields = {"deadline_at", "reminder_before_minutes", "reminder_type", "follow_up_details"}
+    assignment_fields = {"assigned_user_id", "assigned_user_name"}
+    if any(
+        key in updates
+        for key in ("deadline_at", "reminder_before_minutes", "reminder_type", "follow_up_details", "assigned_user_id")
+    ):
+        # Re-arm email reminder when appointment timing/assignee details change.
+        updates["reminder_email_sent_at"] = None
+    if any(key in updates for key in assignment_fields) and not has_permission(current_user, "can_change_assignee"):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية تغيير الموظف المسؤول.")
-    if current_user.role == "employee" and ("assigned_user_id" in updates or "assigned_user_name" in updates):
+    if current_user.role == "employee" and any(key in updates for key in assignment_fields):
         raise HTTPException(status_code=403, detail="تعديل الموظف المسؤول متاح للمالك أو المدير فقط.")
     if "city" in updates:
         updates["city"] = normalize_city(updates.get("city"))
@@ -495,14 +744,54 @@ async def update_client_request_service(
     updated = await update_client_request_db(owner_id, request_id, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
+    if any(key in updates for key in assignment_fields):
+        old_assignee = str(current_item.get("assigned_user_id") or "")
+        new_assignee = str(updated.get("assigned_user_id") or "")
+        if new_assignee and new_assignee != old_assignee:
+            await _send_assignment_email_if_needed(
+                owner_id=owner_id,
+                current_user=current_user,
+                assignee_id=new_assignee,
+                client_name=updated.get("client_name"),
+                source_label="طلب العميل",
+            )
+        if old_assignee and old_assignee != new_assignee:
+            await _send_unassignment_email_if_needed(
+                owner_id=owner_id,
+                current_user=current_user,
+                assignee_id=old_assignee,
+                client_name=updated.get("client_name"),
+                source_label="طلب العميل",
+            )
+    await _send_closed_status_email_if_needed(
+        owner_id=owner_id,
+        current_user=current_user,
+        previous_status=current_item.get("status"),
+        new_status=updated.get("status"),
+        client_name=updated.get("client_name"),
+        source_label="طلب العميل",
+    )
+    if current_user.role == "employee" and any(key in updates for key in appointment_fields):
+        await _send_appointment_confirmation_email_if_needed(
+            owner_id=owner_id,
+            current_user=current_user,
+            item=updated,
+            source_label="طلب العميل",
+        )
+    if "deadline_at" in updates:
+        await _send_rescheduled_email_if_needed(
+            owner_id=owner_id,
+            current_user=current_user,
+            previous_item=current_item,
+            updated_item=updated,
+            source_label="طلب العميل",
+        )
     return ClientRequestPublic(**updated)
 
 
 async def delete_client_request_service(request_id: str, current_user: UserPublic) -> None:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     current_item = await get_client_request_by_id_db(owner_id, request_id)
     if not current_item:
         raise HTTPException(status_code=404, detail="طلب العميل غير موجود.")
@@ -545,9 +834,7 @@ async def list_client_offers_service(current_user: UserPublic) -> List[ClientOff
 
 async def create_client_offer_service(payload: ClientOfferInput, current_user: UserPublic) -> ClientOfferPublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     if payload.property_id:
         property_item = await get_property_by_id(payload.property_id)
         if not property_item or property_item.get("owner_id") != owner_id:
@@ -576,6 +863,13 @@ async def create_client_offer_service(payload: ClientOfferInput, current_user: U
             "assigned_user_id": assigned_user_id,
             "assigned_user_name": assigned_user_name,
         },
+    )
+    await _send_assignment_email_if_needed(
+        owner_id=owner_id,
+        current_user=current_user,
+        assignee_id=offer.get("assigned_user_id"),
+        client_name=offer.get("client_name"),
+        source_label="عرض العميل",
     )
     await create_owner_team_notification(
         owner_id=owner_id,
@@ -626,9 +920,7 @@ async def update_client_offer_service(
     current_user: UserPublic,
 ) -> ClientOfferPublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     current_item = await get_client_offer_by_id_db(owner_id, offer_id)
     if not current_item:
         raise HTTPException(status_code=404, detail="العرض غير موجود.")
@@ -636,21 +928,69 @@ async def update_client_offer_service(
     if not _is_visible_item(current_item, current_user):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية الوصول إلى هذا العميل.")
     updates = payload.model_dump(exclude_unset=True)
-    if ("assigned_user_id" in updates or "assigned_user_name" in updates) and not has_permission(current_user, "can_change_assignee"):
+    appointment_fields = {"deadline_at", "reminder_before_minutes", "reminder_type", "follow_up_details"}
+    assignment_fields = {"assigned_user_id", "assigned_user_name"}
+    if any(
+        key in updates
+        for key in ("deadline_at", "reminder_before_minutes", "reminder_type", "follow_up_details", "assigned_user_id")
+    ):
+        # Re-arm email reminder when appointment timing/assignee details change.
+        updates["reminder_email_sent_at"] = None
+    if any(key in updates for key in assignment_fields) and not has_permission(current_user, "can_change_assignee"):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية تغيير الموظف المسؤول.")
-    if current_user.role == "employee" and ("assigned_user_id" in updates or "assigned_user_name" in updates):
+    if current_user.role == "employee" and any(key in updates for key in assignment_fields):
         raise HTTPException(status_code=403, detail="تعديل الموظف المسؤول متاح للمالك أو المدير فقط.")
     updated = await update_client_offer_db(owner_id, offer_id, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="العرض غير موجود.")
+    if any(key in updates for key in assignment_fields):
+        old_assignee = str(current_item.get("assigned_user_id") or "")
+        new_assignee = str(updated.get("assigned_user_id") or "")
+        if new_assignee and new_assignee != old_assignee:
+            await _send_assignment_email_if_needed(
+                owner_id=owner_id,
+                current_user=current_user,
+                assignee_id=new_assignee,
+                client_name=updated.get("client_name"),
+                source_label="عرض العميل",
+            )
+        if old_assignee and old_assignee != new_assignee:
+            await _send_unassignment_email_if_needed(
+                owner_id=owner_id,
+                current_user=current_user,
+                assignee_id=old_assignee,
+                client_name=updated.get("client_name"),
+                source_label="عرض العميل",
+            )
+    await _send_closed_status_email_if_needed(
+        owner_id=owner_id,
+        current_user=current_user,
+        previous_status=current_item.get("status"),
+        new_status=updated.get("status"),
+        client_name=updated.get("client_name"),
+        source_label="عرض العميل",
+    )
+    if current_user.role == "employee" and any(key in updates for key in appointment_fields):
+        await _send_appointment_confirmation_email_if_needed(
+            owner_id=owner_id,
+            current_user=current_user,
+            item=updated,
+            source_label="عرض العميل",
+        )
+    if "deadline_at" in updates:
+        await _send_rescheduled_email_if_needed(
+            owner_id=owner_id,
+            current_user=current_user,
+            previous_item=current_item,
+            updated_item=updated,
+            source_label="عرض العميل",
+        )
     return ClientOfferPublic(**updated)
 
 
 async def delete_client_offer_service(offer_id: str, current_user: UserPublic) -> None:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     current_item = await get_client_offer_by_id_db(owner_id, offer_id)
     if not current_item:
         raise HTTPException(status_code=404, detail="العرض غير موجود.")
@@ -668,9 +1008,7 @@ async def create_client_offer_note_service(
     current_user: UserPublic,
 ) -> ClientNotePublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     offer_item = await get_client_offer_by_id_db(owner_id, offer_id)
     if not offer_item:
         raise HTTPException(status_code=404, detail="العرض غير موجود.")
@@ -737,9 +1075,7 @@ async def update_client_offer_note_service(
     current_user: UserPublic,
 ) -> ClientNotePublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     offer_item = await get_client_offer_by_id_db(owner_id, offer_id)
     if not offer_item:
         raise HTTPException(status_code=404, detail="العرض غير موجود.")
@@ -755,9 +1091,7 @@ async def update_client_offer_note_service(
 
 async def delete_client_offer_note_service(offer_id: str, note_id: str, current_user: UserPublic) -> None:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     offer_item = await get_client_offer_by_id_db(owner_id, offer_id)
     if not offer_item:
         raise HTTPException(status_code=404, detail="العرض غير موجود.")
@@ -785,9 +1119,7 @@ async def get_client_offers_stats_service(current_user: UserPublic) -> Dict[str,
 
 async def create_client_profile_service(payload: ClientProfileInput, current_user: UserPublic) -> ClientProfilePublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     profile_data = payload.model_dump()
     # Assignment is now controlled per request/offer, not on profile itself.
     profile_data.pop("assigned_user_id", None)
@@ -842,9 +1174,7 @@ async def update_client_profile_service(
     current_user: UserPublic,
 ) -> ClientProfilePublic:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     current_profile = await get_client_profile_by_id_db(owner_id, profile_id)
     if not current_profile:
         raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
@@ -865,9 +1195,7 @@ async def update_client_profile_service(
 
 async def delete_client_profile_service(profile_id: str, current_user: UserPublic) -> None:
     require_permission(current_user, "can_manage_clients")
-    owner_id = _owner_id(current_user)
-    if not owner_id:
-        raise HTTPException(status_code=400, detail="لا يمكن تحديد شركة الحساب الحالي.")
+    owner_id = await require_active_subscription_for_client_writes(current_user)
     current_profile = await get_client_profile_by_id_db(owner_id, profile_id)
     if not current_profile:
         raise HTTPException(status_code=404, detail="الملف الشخصي غير موجود.")
