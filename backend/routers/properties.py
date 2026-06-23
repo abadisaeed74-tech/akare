@@ -1,9 +1,10 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from dependencies import get_current_user
 from models import Property, PropertyInput, PropertyUpdate, UserPublic
+from services.audit_service import create_audit_log
 from services.property_service import (
     ai_search_properties_service,
     create_property_service,
@@ -22,27 +23,53 @@ router = APIRouter()
 
 @router.post("/properties", response_model=Property, status_code=201)
 async def create_property_endpoint(
+    request: Request,
     property_input: PropertyInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await create_property_service(property_input, current_user)
+    created = await create_property_service(property_input, current_user)
+    await create_audit_log(
+        action="CREATE_PROPERTY",
+        entity_type="property",
+        entity_id=created.id,
+        current_user=current_user,
+        request=request,
+    )
+    return created
 
 
 @router.put("/properties/{property_id}", response_model=Property)
 async def update_property_endpoint(
+    request: Request,
     property_id: str,
     updates: PropertyUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await update_property_service(property_id, updates, current_user)
+    updated = await update_property_service(property_id, updates, current_user)
+    await create_audit_log(
+        action="UPDATE_PROPERTY",
+        entity_type="property",
+        entity_id=updated.id or property_id,
+        current_user=current_user,
+        request=request,
+    )
+    return updated
 
 
 @router.delete("/properties/id/{property_id}", status_code=204)
 async def delete_property_endpoint(
+    request: Request,
     property_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
     await delete_property_service(property_id, current_user)
+    await create_audit_log(
+        action="DELETE_PROPERTY",
+        entity_type="property",
+        entity_id=property_id,
+        current_user=current_user,
+        request=request,
+    )
     return None
 
 

@@ -38,6 +38,7 @@ client_profile_collection = database.get_collection("client_profiles")
 marketing_lead_collection = database.get_collection("marketing_leads")
 marketing_event_collection = database.get_collection("marketing_events")
 notification_collection = database.get_collection("notifications")
+audit_log_collection = database.get_collection("audit_logs")
 PROPERTY_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 # Helper to convert document from DB

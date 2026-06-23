@@ -19,6 +19,7 @@ from services.stripe_service import (
     start_free_trial_service,
     stripe_webhook_service,
 )
+from services.audit_service import create_audit_log
 
 router = APIRouter()
 
@@ -46,6 +47,7 @@ async def create_billing_portal_session(
 
 @router.post("/billing/confirm-checkout-session", response_model=CompanySettings)
 async def confirm_checkout_session(
+    request: Request,
     session_id: str = Query(..., min_length=3),
     current_user: UserPublic = Depends(get_current_user),
 ):
@@ -53,7 +55,16 @@ async def confirm_checkout_session(
     Confirm checkout session on return from Stripe and sync company subscription state.
     Useful when webhook is delayed/unavailable in local development.
     """
-    return await confirm_checkout_session_service(session_id, current_user)
+    updated = await confirm_checkout_session_service(session_id, current_user)
+    await create_audit_log(
+        action="SUBSCRIPTION_ACTIVATED",
+        entity_type="company",
+        entity_id=current_user.company_owner_id or current_user.id,
+        current_user=current_user,
+        request=request,
+        details={"source": "confirm_checkout_session"},
+    )
+    return updated
 
 
 @router.post("/billing/webhook")
@@ -69,6 +80,7 @@ async def stripe_webhook(
 
 @router.post("/billing/activate-subscription", response_model=CompanySettings)
 async def activate_subscription(
+    request: Request,
     data: PlanChangeRequest,
     current_user: UserPublic = Depends(get_current_user),
 ):
@@ -76,17 +88,36 @@ async def activate_subscription(
     تفعيل الاشتراك في الخطة المحددة (بعد إتمام الدفع عبر Stripe).
     يقوم بتعيين plan_key وتحديد is_subscribed وتواريخ بداية ونهاية الاشتراك.
     """
-    return await activate_subscription_service(data, current_user)
+    updated = await activate_subscription_service(data, current_user)
+    await create_audit_log(
+        action="SUBSCRIPTION_ACTIVATED",
+        entity_type="company",
+        entity_id=current_user.company_owner_id or current_user.id,
+        current_user=current_user,
+        request=request,
+        details={"plan_key": data.plan_key},
+    )
+    return updated
 
 
 @router.post("/billing/start-free-trial", response_model=CompanySettings)
 async def start_free_trial(
+    request: Request,
     data: PlanChangeRequest,
     current_user: UserPublic = Depends(get_current_user),
 ):
     """
     Activate a one-time free trial (30 days) without payment.
     """
-    return await start_free_trial_service(data, current_user)
+    updated = await start_free_trial_service(data, current_user)
+    await create_audit_log(
+        action="SUBSCRIPTION_ACTIVATED",
+        entity_type="company",
+        entity_id=current_user.company_owner_id or current_user.id,
+        current_user=current_user,
+        request=request,
+        details={"plan_key": data.plan_key, "mode": "free_trial"},
+    )
+    return updated
 
 

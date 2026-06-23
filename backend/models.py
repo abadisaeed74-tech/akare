@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from typing import Optional, List, Literal, Dict
+from typing import Any, Optional, List, Literal, Dict
 from datetime import datetime
 
 
@@ -550,6 +550,28 @@ class NotificationPublic(BaseModel):
     metadata: Dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     read_at: Optional[datetime] = None
+
+
+class AuditLogPublic(BaseModel):
+    id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    user_name: Optional[str] = None
+    company_owner_id: Optional[str] = None
+    action: str
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class AuditLogsResponse(BaseModel):
+    items: List[AuditLogPublic] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
 
 
 # ===== Client Request Notes =====

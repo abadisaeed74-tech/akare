@@ -1,11 +1,13 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
 from dependencies import get_current_user
 from models import UserCreate, UserPublic
+from database import get_user_by_email
+from services.audit_service import create_audit_log
 from services.auth_service import (
     login_service,
     register_user_service,
@@ -26,8 +28,27 @@ async def register_user(user_in: UserCreate):
 
 
 @router.post("/auth/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    return await login_service(form_data)
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    try:
+        token_payload = await login_service(form_data)
+    except HTTPException as exc:
+        await create_audit_log(
+            action="LOGIN_FAILED",
+            entity_type="auth",
+            request=request,
+            user_email=form_data.username,
+            details={"reason": str(exc.detail)},
+        )
+        raise
+    user = await get_user_by_email(form_data.username)
+    await create_audit_log(
+        action="LOGIN_SUCCESS",
+        entity_type="auth",
+        current_user=UserPublic(**user) if user else None,
+        request=request,
+        user_email=form_data.username,
+    )
+    return token_payload
 
 
 @router.get("/me", response_model=UserPublic)

@@ -25,6 +25,7 @@ from routers import (
     uploads,
 )
 from services.email_reminder_service import run_email_reminders_scheduler
+from services.audit_service import ensure_audit_indexes
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 ensure_stripe_env_or_raise()
@@ -59,6 +60,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.on_event("startup")
 async def startup_email_scheduler() -> None:
+    await ensure_audit_indexes()
     app.state.email_scheduler_stop_event = asyncio.Event()
     app.state.email_scheduler_task = asyncio.create_task(
         run_email_reminders_scheduler(app.state.email_scheduler_stop_event)

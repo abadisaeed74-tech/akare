@@ -362,6 +362,28 @@ export interface PlatformOfficeDetail extends PlatformOfficeSummary {
   properties: PlatformPropertyMini[];
 }
 
+export interface AuditLogItem {
+  id: string;
+  user_id?: string | null;
+  user_email?: string | null;
+  user_name?: string | null;
+  company_owner_id?: string | null;
+  action: string;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  details?: Record<string, string>;
+  created_at: string;
+}
+
+export interface AuditLogsResponse {
+  items: AuditLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export const uploadFile = async (file: File): Promise<string> => {
   const formData = new FormData();
   formData.append('file', file);
@@ -486,6 +508,20 @@ export const platformAdminSubscriptionAction = async (
 
 export const platformAdminDeleteOffice = async (ownerUserId: string): Promise<void> => {
   await apiClient.delete(`/admin/platform-offices/${ownerUserId}`);
+};
+
+export const getAuditLogs = async (params?: {
+  company_owner_id?: string;
+  user_id?: string;
+  action?: string;
+  search?: string;
+  date_from?: string;
+  date_to?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<AuditLogsResponse> => {
+  const response = await apiClient.get('/admin/audit-logs', { params });
+  return response.data;
 };
 
 // ===== Settings / Company API =====

@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from dependencies import get_current_user
 from models import (
@@ -10,6 +10,7 @@ from models import (
     ClientProfileUpdate,
     UserPublic,
 )
+from services.audit_service import create_audit_log
 from services.client_service import (
     create_client_profile_service,
     delete_client_profile_service,
@@ -23,10 +24,19 @@ router = APIRouter()
 
 @router.post("/clients/profiles", response_model=ClientProfilePublic, status_code=201)
 async def create_client_profile(
+    request: Request,
     payload: ClientProfileInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await create_client_profile_service(payload, current_user)
+    created = await create_client_profile_service(payload, current_user)
+    await create_audit_log(
+        action="CREATE_CLIENT",
+        entity_type="client_profile",
+        entity_id=created.id,
+        current_user=current_user,
+        request=request,
+    )
+    return created
 
 
 @router.get("/clients/profiles", response_model=List[ClientProfilePublic])
@@ -49,19 +59,36 @@ async def get_client_profile(
 
 @router.put("/clients/profiles/{profile_id}", response_model=ClientProfilePublic)
 async def update_client_profile(
+    request: Request,
     profile_id: str,
     payload: ClientProfileUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await update_client_profile_service(profile_id, payload, current_user)
+    updated = await update_client_profile_service(profile_id, payload, current_user)
+    await create_audit_log(
+        action="UPDATE_CLIENT",
+        entity_type="client_profile",
+        entity_id=updated.id,
+        current_user=current_user,
+        request=request,
+    )
+    return updated
 
 
 @router.delete("/clients/profiles/{profile_id}", status_code=204)
 async def delete_client_profile(
+    request: Request,
     profile_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
     await delete_client_profile_service(profile_id, current_user)
+    await create_audit_log(
+        action="DELETE_CLIENT",
+        entity_type="client_profile",
+        entity_id=profile_id,
+        current_user=current_user,
+        request=request,
+    )
     return None
 
 

@@ -38,12 +38,14 @@ import {
   YAxis,
 } from 'recharts';
 import {
+  getAuditLogs,
   getCurrentUser,
   getPlatformOfficeDetail,
   getPlatformOffices,
   getPlatformStats,
   platformAdminDeleteOffice,
   platformAdminSubscriptionAction,
+  type AuditLogItem,
   type PlatformOfficeDetail,
   type PlatformOfficeSummary,
   type PlatformStats,
@@ -95,6 +97,7 @@ const formatDateTime = (v?: string | null) =>
         hour: '2-digit',
         minute: '2-digit',
         hour12: false,
+        timeZone: 'Asia/Riyadh',
       }).format(new Date(v))
     : 'غير متوفر';
 const statusLabel = (status?: string | null) => {
@@ -103,6 +106,33 @@ const statusLabel = (status?: string | null) => {
   if (status === 'cancelled') return 'ملغي';
   if (status === 'expired') return 'منتهي';
   return 'غير محدد';
+};
+const actionLabel = (action?: string | null) => {
+  const key = String(action || '').trim().toUpperCase();
+  const map: Record<string, string> = {
+    LOGIN_SUCCESS: 'تسجيل دخول ناجح',
+    LOGIN_FAILED: 'فشل تسجيل الدخول',
+    LOGOUT: 'تسجيل الخروج',
+    CREATE_PROPERTY: 'إضافة عقار',
+    UPDATE_PROPERTY: 'تعديل عقار',
+    DELETE_PROPERTY: 'حذف عقار',
+    CREATE_CLIENT: 'إضافة عميل',
+    UPDATE_CLIENT: 'تعديل عميل',
+    DELETE_CLIENT: 'حذف عميل',
+    CREATE_APPOINTMENT: 'إنشاء موعد',
+    UPDATE_APPOINTMENT: 'تعديل موعد',
+    DELETE_APPOINTMENT: 'حذف موعد',
+    UPLOAD_FILE: 'رفع ملف',
+    CREATE_EMPLOYEE: 'إضافة موظف',
+    UPDATE_EMPLOYEE: 'تعديل موظف',
+    DISABLE_EMPLOYEE: 'تعطيل موظف',
+    DELETE_EMPLOYEE: 'حذف موظف',
+    SUBSCRIPTION_ACTIVATED: 'تفعيل اشتراك',
+    SUBSCRIPTION_RENEWED: 'تجديد اشتراك',
+    SUBSCRIPTION_EXPIRED: 'انتهاء اشتراك',
+    DELETE_OFFICE: 'حذف مكتب',
+  };
+  return map[key] || action || 'غير معروف';
 };
 const PLAN_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'starter', label: 'مبتدئ' },
@@ -174,6 +204,15 @@ const PlatformAdminPage: React.FC = () => {
   const [subscriptionDays, setSubscriptionDays] = useState<number>(30);
   const [freePlanKey, setFreePlanKey] = useState<string>('business');
   const [error, setError] = useState<string | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
+  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditCompanyFilter, setAuditCompanyFilter] = useState<string>('all');
+  const [auditUserFilter, setAuditUserFilter] = useState<string>('all');
+  const [auditActionFilter, setAuditActionFilter] = useState<string>('all');
+  const [auditDateFrom, setAuditDateFrom] = useState<string>('');
+  const [auditDateTo, setAuditDateTo] = useState<string>('');
+  const [auditPage, setAuditPage] = useState(1);
   const [now, setNow] = useState(Date.now());
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -218,6 +257,28 @@ const PlatformAdminPage: React.FC = () => {
     const [statsData, officesData] = await Promise.all([getPlatformStats(), getPlatformOffices()]);
     setStats(statsData);
     setOffices(officesData);
+  };
+
+  const loadAuditLogs = async () => {
+    setAuditLoading(true);
+    try {
+      const payload = await getAuditLogs({
+        company_owner_id: auditCompanyFilter === 'all' ? undefined : auditCompanyFilter,
+        user_id: auditUserFilter === 'all' ? undefined : auditUserFilter,
+        action: auditActionFilter === 'all' ? undefined : auditActionFilter,
+        search: searchText || undefined,
+        date_from: auditDateFrom || undefined,
+        date_to: auditDateTo || undefined,
+        page: auditPage,
+        page_size: 50,
+      });
+      setAuditLogs(payload.items || []);
+      setAuditTotal(payload.total || 0);
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || 'تعذر تحميل سجل التدقيق.');
+    } finally {
+      setAuditLoading(false);
+    }
   };
 
   const loadOfficeDetail = async (ownerUserId: string) => {
@@ -311,6 +372,24 @@ const PlatformAdminPage: React.FC = () => {
     return filteredOffices.slice(start, start + pageSize);
   }, [currentPage, filteredOffices, pageSize]);
 
+  const auditActions = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of auditLogs) {
+      if (row.action) set.add(row.action);
+    }
+    return Array.from(set.values()).sort();
+  }, [auditLogs]);
+
+  const auditUsers = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of auditLogs) {
+      if (row.user_id) {
+        map.set(row.user_id, row.user_email || row.user_name || row.user_id);
+      }
+    }
+    return Array.from(map.entries());
+  }, [auditLogs]);
+
   const openOfficeDetail = async (office: PlatformOfficeSummary) => {
     setSelectedOffice(office);
     setOfficeDetail(null);
@@ -366,6 +445,12 @@ const PlatformAdminPage: React.FC = () => {
       }
     })();
   };
+
+  useEffect(() => {
+    if (section === 'logs') {
+      void loadAuditLogs();
+    }
+  }, [section, auditCompanyFilter, auditUserFilter, auditActionFilter, auditDateFrom, auditDateTo, auditPage, searchText]);
 
   if (loading) {
     return (
@@ -776,10 +861,100 @@ const PlatformAdminPage: React.FC = () => {
 
           {section === 'logs' && (
             <section className={`${panelClass} mt-4`}>
-              <EmptyState
-                title="سجل النشاط غير متاح من الخادم"
-                subtitle="لا يوجد endpoint فعلي لجلب Activity Logs حاليًا."
-              />
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <select
+                  value={auditCompanyFilter}
+                  onChange={(e) => {
+                    setAuditCompanyFilter(e.target.value);
+                    setAuditPage(1);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="all">كل المكاتب</option>
+                  {offices.map((office) => (
+                    <option key={office.owner_user_id} value={office.owner_user_id}>
+                      {office.company_name || office.owner_user_id}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={auditUserFilter}
+                  onChange={(e) => {
+                    setAuditUserFilter(e.target.value);
+                    setAuditPage(1);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="all">كل المستخدمين</option>
+                  {auditUsers.map(([id, label]) => (
+                    <option key={id} value={id}>{label}</option>
+                  ))}
+                </select>
+                <select
+                  value={auditActionFilter}
+                  onChange={(e) => {
+                    setAuditActionFilter(e.target.value);
+                    setAuditPage(1);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
+                >
+                  <option value="all">كل العمليات</option>
+                  {auditActions.map((a) => (
+                    <option key={a} value={a}>{actionLabel(a)}</option>
+                  ))}
+                </select>
+                <input
+                  type="date"
+                  value={auditDateFrom}
+                  onChange={(e) => {
+                    setAuditDateFrom(e.target.value);
+                    setAuditPage(1);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
+                />
+                <input
+                  type="date"
+                  value={auditDateTo}
+                  onChange={(e) => {
+                    setAuditDateTo(e.target.value);
+                    setAuditPage(1);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
+                />
+              </div>
+              {auditLoading ? (
+                <div className="flex items-center justify-center py-10"><Spin /></div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                  <table className="min-w-[1200px] w-full text-right text-xs">
+                    <thead className="bg-slate-100 dark:bg-slate-800">
+                      <tr>
+                        <th className="px-2 py-2">الوقت</th>
+                        <th className="px-2 py-2">العملية</th>
+                        <th className="px-2 py-2">المستخدم</th>
+                        <th className="px-2 py-2">المكتب</th>
+                        <th className="px-2 py-2">العنصر</th>
+                        <th className="px-2 py-2">IP</th>
+                        <th className="px-2 py-2">تفاصيل</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditLogs.map((row) => (
+                        <tr key={row.id} className="border-t border-slate-200 dark:border-slate-700">
+                          <td className="px-2 py-2">{formatDateTime(row.created_at)}</td>
+                          <td className="px-2 py-2">{actionLabel(row.action)}</td>
+                          <td className="px-2 py-2">{row.user_email || row.user_name || row.user_id || '-'}</td>
+                          <td className="px-2 py-2">{row.company_owner_id || '-'}</td>
+                          <td className="px-2 py-2">{row.entity_type || '-'} / {row.entity_id || '-'}</td>
+                          <td className="px-2 py-2">{row.ip_address || '-'}</td>
+                          <td className="px-2 py-2">{Object.keys(row.details || {}).length ? JSON.stringify(row.details) : '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="mt-3 text-xs text-slate-500">إجمالي السجلات: {formatNumber(auditTotal)}</div>
             </section>
           )}
 

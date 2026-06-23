@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from dependencies import get_current_user
 from models import (
@@ -17,6 +17,7 @@ from models import (
     TeamUserPublic,
     UserPublic,
 )
+from services.audit_service import create_audit_log
 from services.settings_service import (
     change_plan_service,
     check_subdomain_service,
@@ -81,16 +82,39 @@ async def list_team_users(current_user: UserPublic = Depends(get_current_user)):
 
 @router.post("/settings/team/users", response_model=TeamUserPublic)
 async def create_team_user(
+    request: Request,
     data: EmployeeCreate,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await create_team_user_service(data, current_user)
+    created = await create_team_user_service(data, current_user)
+    await create_audit_log(
+        action="CREATE_EMPLOYEE",
+        entity_type="employee",
+        entity_id=created.id,
+        current_user=current_user,
+        request=request,
+    )
+    return created
 
 
 @router.put("/settings/team/users/{user_id}", response_model=TeamUserPublic)
 async def update_team_user(
+    request: Request,
     user_id: str,
     data: EmployeeUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await update_team_user_service(user_id, data, current_user)
+    updated = await update_team_user_service(user_id, data, current_user)
+    action = "UPDATE_EMPLOYEE"
+    if data.status == "disabled":
+        action = "DISABLE_EMPLOYEE"
+    elif data.status == "active":
+        action = "UPDATE_EMPLOYEE"
+    await create_audit_log(
+        action=action,
+        entity_type="employee",
+        entity_id=updated.id,
+        current_user=current_user,
+        request=request,
+    )
+    return updated

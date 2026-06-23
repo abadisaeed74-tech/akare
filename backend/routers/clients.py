@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from dependencies import get_current_user
 from models import (
@@ -14,6 +14,7 @@ from models import (
     Property,
     UserPublic,
 )
+from services.audit_service import create_audit_log
 from services.client_service import (
     create_client_request_note_service,
     create_client_request_service,
@@ -31,10 +32,19 @@ router = APIRouter()
 
 @router.post("/clients", response_model=ClientRequestPublic, status_code=201)
 async def create_client_request_endpoint(
+    request: Request,
     payload: ClientRequestInput,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await create_client_request_service(payload, current_user)
+    created = await create_client_request_service(payload, current_user)
+    await create_audit_log(
+        action="CREATE_CLIENT",
+        entity_type="client_request",
+        entity_id=created.id,
+        current_user=current_user,
+        request=request,
+    )
+    return created
 
 
 @router.get("/clients", response_model=List[ClientRequestPublic])
@@ -89,19 +99,47 @@ async def delete_client_request_note(
 
 @router.put("/clients/{request_id}", response_model=ClientRequestPublic)
 async def update_client_request_endpoint(
+    request: Request,
     request_id: str,
     payload: ClientRequestUpdate,
     current_user: UserPublic = Depends(get_current_user),
 ):
-    return await update_client_request_service(request_id, payload, current_user)
+    updated = await update_client_request_service(request_id, payload, current_user)
+    await create_audit_log(
+        action="UPDATE_CLIENT",
+        entity_type="client_request",
+        entity_id=updated.id,
+        current_user=current_user,
+        request=request,
+    )
+    payload_data = payload.model_dump(exclude_unset=True)
+    if any(k in payload_data for k in ("deadline_at", "reminder_before_minutes", "reminder_type", "follow_up_details")):
+        appointment_action = "DELETE_APPOINTMENT" if payload_data.get("deadline_at", "__unchanged__") is None else "UPDATE_APPOINTMENT"
+        await create_audit_log(
+            action=appointment_action,
+            entity_type="appointment",
+            entity_id=updated.id,
+            current_user=current_user,
+            request=request,
+            details={"source_type": "client_request"},
+        )
+    return updated
 
 
 @router.delete("/clients/{request_id}", status_code=204)
 async def delete_client_request_endpoint(
+    request: Request,
     request_id: str,
     current_user: UserPublic = Depends(get_current_user),
 ):
     await delete_client_request_service(request_id, current_user)
+    await create_audit_log(
+        action="DELETE_CLIENT",
+        entity_type="client_request",
+        entity_id=request_id,
+        current_user=current_user,
+        request=request,
+    )
     return None
 
 
